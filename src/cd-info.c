@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2003-2005, 2007-2008, 2011-2012, 2014, 2017
+  Copyright (C) 2003-2005, 2007-2008, 2011-2012, 2014, 2017-2018
   Rocky Bernstein <rocky@gnu.org>
   Copyright (C) 1996, 1997, 1998  Gerd Knorr <kraxel@bytesex.org>
          and Heiko Eiﬂfeldt <heiko@hexco.de>
@@ -452,8 +452,9 @@ print_cdtext_info(CdIo_t *p_cdio, track_t i_tracks, track_t i_first_track) {
 
   languages = cdtext_list_languages(p_cdtext);
   for(i=0; i<8; i++)
-    if ( CDTEXT_LANGUAGE_UNKNOWN != languages[i]
-         && cdtext_select_language(p_cdtext, languages[i]))
+    if ( (CDTEXT_LANGUAGE_UNKNOWN != languages[i]
+	  && cdtext_select_language(p_cdtext, languages[i]))
+	 || (i == 0) ) // forcing one iteration as cdtext is not NULL
     {
       printf("\nLanguage %d '%s':\n", i, cdtext_lang2str(languages[i]));
 
