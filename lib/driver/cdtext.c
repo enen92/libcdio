@@ -501,11 +501,12 @@ cdtext_set(cdtext_t *p_cdtext, cdtext_field_t key, const uint8_t *value,
   /* recode to UTF-8 */
   if (NULL != charset) {
     cdio_utf8_t *utf8_str = NULL;
-    cdio_charset_to_utf8((const char*) value, strlen((const char*)value),
-                        &utf8_str, charset);
-    p_cdtext->block[p_cdtext->block_i].track[track].field[key] = (char *)utf8_str;
-  } else
-    p_cdtext->block[p_cdtext->block_i].track[track].field[key] = strdup((const char *)value);
+    bool retval;
+    retval = cdio_charset_to_utf8((const char*) value, strlen((const char*)value),
+				  &utf8_str, charset);
+    if (retval == 0) return;
+  }
+  p_cdtext->block[p_cdtext->block_i].track[track].field[key] = strdup((const char *)value);
 }
 
 #define CDTEXT_COMPARE_CHAR(buf, c, db) ((buf)[0] == c && (! db || (buf)[1] == c) )
