@@ -105,13 +105,13 @@ main(int argc, const char *argv[])
       /* Now try getting the statbuf another way */
       char buf[ISO_BLOCKSIZE];
       char *psz_path = NULL;
-      const lsn_t i_lsn = p_statbuf->lsn;
+      const lsn_t i_lsn = p_statbuf->lsn[0];
       iso9660_stat_t *p_statbuf2 = iso9660_ifs_find_lsn (p_iso, i_lsn);
       iso9660_stat_t *p_statbuf3 =
 	iso9660_ifs_find_lsn_with_path (p_iso, i_lsn, &psz_path);
 
       /* Compare the two statbufs. */
-      if (p_statbuf->lsn != p_statbuf2->lsn ||
+      if (p_statbuf->lsn[0] != p_statbuf2->lsn[0] ||
 	  p_statbuf->size != p_statbuf2->size ||
 	  p_statbuf->type != p_statbuf2->type) {
 
@@ -121,7 +121,7 @@ main(int argc, const char *argv[])
 	  goto exit;
       }
 
-      if (p_statbuf3->lsn != p_statbuf2->lsn ||
+      if (p_statbuf3->lsn[0] != p_statbuf2->lsn[0] ||
 	  p_statbuf3->size != p_statbuf2->size ||
 	  p_statbuf3->type != p_statbuf2->type) {
 	rc = 4;
@@ -147,7 +147,7 @@ main(int argc, const char *argv[])
       if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, i_lsn, 1) )
 	{
 	  fprintf(stderr, "Error reading ISO 9660 file at lsn %lu\n",
-		  (long unsigned int) p_statbuf->lsn);
+		  (long unsigned int) p_statbuf->lsn[0]);
 	  rc = 7;
 	  goto exit;
 	}

@@ -101,18 +101,20 @@ main(int argc, const char *argv[])
   if (p_entlist) {
     _CDIO_LIST_FOREACH (p_entnode, p_entlist)
     {
+      int i;
       char filename[4096];
       iso9660_stat_t *p_statbuf =
 	(iso9660_stat_t *) _cdio_list_node_data (p_entnode);
       iso9660_name_translate(p_statbuf->filename, filename);
-      printf ("%s [LSN %6d] %8u %s%s\n",
-	      _STAT_DIR == p_statbuf->type ? "d" : "-",
-	      p_statbuf->lsn, p_statbuf->size, psz_path, filename);
+      for (i = 0; i < p_statbuf->extents; i++) {
+	printf ("%s [LSN %6d] %8u %s%s\n",
+		_STAT_DIR == p_statbuf->type ? "d" : "-",
+		p_statbuf->lsn[i], p_statbuf->extsize[i], psz_path, filename);
+      }
     }
 
-   iso9660_filelist_free(p_entlist);
+    iso9660_filelist_free(p_entlist);
   }
-
 
   iso9660_close(p_iso);
   return 0;

@@ -174,9 +174,9 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
   CdioListNode_t *p_entnode;
   iso9660_stat_t *p_statbuf;
   CdioISO9660FileList_t* p_entlist;
-  size_t i;
+  size_t i, j;
   lsn_t lsn;
-  int64_t i_file_length;
+  int64_t i_extent_length;
 
   if ((p_iso == NULL) || (psz_path == NULL))
     return 1;
@@ -210,22 +210,24 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
         fprintf(stderr, "  Unable to create file\n");
         goto out;
       }
-      i_file_length = p_statbuf->size;
-      for (i = 0; i_file_length > 0; i++) {
-        memset(buf, 0, ISO_BLOCKSIZE);
-        lsn = p_statbuf->lsn + i;
-        if (iso9660_iso_seek_read(p_iso, buf, lsn, 1) != ISO_BLOCKSIZE) {
-          fprintf(stderr, "  Error reading ISO9660 file %s at LSN %lu\n",
-            psz_iso_name, (long unsigned int)lsn);
-          goto out;
+      for (j = 0; j < p_statbuf->extents; j++) {
+        i_extent_length = p_statbuf->extsize[j];
+        for (i = 0; i_extent_length > 0; i++) {
+          memset(buf, 0, ISO_BLOCKSIZE);
+          lsn = p_statbuf->lsn[j] + i;
+          if (iso9660_iso_seek_read(p_iso, buf, lsn, 1) != ISO_BLOCKSIZE) {
+            fprintf(stderr, "  Error reading ISO9660 file %s at LSN %lu\n",
+              psz_iso_name, (long unsigned int)lsn);
+            goto out;
+          }
+          fwrite(buf, (size_t)MIN(i_extent_length, ISO_BLOCKSIZE), 1, fd);
+          if (ferror(fd)) {
+            fprintf(stderr, "  Error writing file %s: %s\n", psz_iso_name,
+              strerror(errno));
+            goto out;
+          }
+          i_extent_length -= ISO_BLOCKSIZE;
         }
-        fwrite(buf, (size_t)MIN(i_file_length, ISO_BLOCKSIZE), 1, fd);
-        if (ferror(fd)) {
-	  fprintf(stderr, "  Error writing file %s: %s\n", psz_iso_name,
-		  strerror(errno));
-          goto out;
-        }
-        i_file_length -= ISO_BLOCKSIZE;
       }
       fclose(fd);
       fd = NULL;
