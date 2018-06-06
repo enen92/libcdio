@@ -29,7 +29,7 @@ for opt in '-T' '--no-tracks' '-A' '--no-analyze' '-I' '--no-ioctl' \
   i=`expr $i + 1`
 done
 
-test_legal_header cd-info "${srcdir}/data/${fname}.cue" cd-info_legal.dump
+#test_legal_header cd-info "${srcdir}/data/${fname}.cue" cd-info_legal.dump
 
 exit $RC
 
