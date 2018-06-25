@@ -488,10 +488,18 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
 	     p_statbuf->rr.st_nlinks,
 	     p_statbuf->rr.st_uid,
 	     p_statbuf->rr.st_gid,
+#ifndef DO_NOT_WANT_COMPATIBILITY
 	     (long unsigned int) p_statbuf->lsn,
+#else
+	     (long unsigned int) p_statbuf->extent_lsn[0],
+#endif
 	     S_ISLNK(p_statbuf->rr.st_mode)
 	     ? strlen(p_statbuf->rr.psz_symlink)
+#ifndef DO_NOT_WANT_COMPATIBILITY
 	     : (unsigned int) p_statbuf->size );
+#else
+	     : (unsigned int) p_statbuf->total_size );
+#endif
 
   } else
 #endif
@@ -501,19 +509,37 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
 	     uint16_from_be (p_statbuf->xa.user_id),
 	     uint16_from_be (p_statbuf->xa.group_id),
 	     p_statbuf->xa.filenum,
+#ifndef DO_NOT_WANT_COMPATIBILITY
 	     (long unsigned int) p_statbuf->lsn );
+#else
+	     (long unsigned int) p_statbuf->extent_lsn[0] );
+#endif
 
     if (uint16_from_be(p_statbuf->xa.attributes) & XA_ATTR_MODE2FORM2) {
       report ( stdout, "%9u (%9u)",
+#ifndef DO_NOT_WANT_COMPATIBILITY
 	       (unsigned int) p_statbuf->secsize * M2F2_SECTOR_SIZE,
 	       (unsigned int) p_statbuf->size );
+#else
+	       (unsigned int) CDIO_EXTENT_BLOCKS(p_statbuf->extent_size[0])* M2F2_SECTOR_SIZE,
+	       (unsigned int) p_statbuf->total_size );
+#endif
     } else
+#ifndef DO_NOT_WANT_COMPATIBILITY
       report (stdout, "%9u", (unsigned int) p_statbuf->size);
+#else
+      report (stdout, "%9u", (unsigned int) p_statbuf->total_size);
+#endif
   } else {
     report ( stdout,"  %c [LSN %6lu] %9u",
 	     (p_statbuf->type == _STAT_DIR) ? 'd' : '-',
+#ifndef DO_NOT_WANT_COMPATIBILITY
 	     (long unsigned int) p_statbuf->lsn,
 	     (unsigned int) p_statbuf->size );
+#else
+	     (long unsigned int) p_statbuf->extent_lsn[0],
+	     (unsigned int) p_statbuf->total_size );
+#endif
   }
 
   if (yep == p_statbuf->rr.b3_rock && b_rock) {

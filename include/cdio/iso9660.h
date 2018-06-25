@@ -156,12 +156,17 @@ extern enum iso_vd_enum_s {
 /*! \brief Maximum number of characters in a volume-set id. */
 #define ISO_MAX_VOLUMESET_ID 128
 
+/*! \brief Maximum number of multi file extent licdio supports. */
+#define ISO_MAX_MULTIEXTENT 8
+
 /*! String inside frame which identifies an ISO 9660 filesystem. This
     string is the "id" field of an iso9660_pvd_t or an iso9660_svd_t.
 */
 extern const char ISO_STANDARD_ID[sizeof("CD001")-1];
 
 #define ISO_STANDARD_ID      "CD001"
+
+#define CDIO_EXTENT_BLOCKS(size) ((size + (ISO_BLOCKSIZE - 1)) / ISO_BLOCKSIZE)
 
 #ifdef __cplusplus
 extern "C" {
@@ -529,17 +534,32 @@ typedef CdioList_t CdioISO9660DirList_t;
 */
 struct iso9660_stat_s { /* big endian!! */
 
- iso_rock_statbuf_t rr;              /**< Rock Ridge-specific fields  */
+  iso_rock_statbuf_t rr;              /**< Rock Ridge-specific fields  */
 
   struct tm          tm;              /**< time on entry - FIXME merge with
                                          one of entries above, like ctime? */
+#ifndef DO_NOT_WANT_COMPATIBILITY
+  /* Legacy API (Deprecated) */
   lsn_t              lsn;             /**< start logical sector number */
-  uint32_t           size;            /**< total size in bytes */
-  uint32_t           secsize;         /**< number of sectors allocated */
+  uint32_t           size;            /**< size of the first extent, in bytes */
+  uint32_t           secsize;         /**< size of the first extent, in sectors */
+#endif /* DO_NOT_WANT_COMPATIBILITY */
+
+  /* Multi-Extent API */
+  uint32_t           num_extents;     /**< number of extents */
+                     /**v combined size of all extents, in bytes */
+  uint64_t           total_size;
+                     /**v start logical sector number for each extent */
+  lsn_t              extent_lsn[ISO_MAX_MULTIEXTENT];
+                     /**v size of each extent */
+  uint32_t           extent_size[ISO_MAX_MULTIEXTENT];
+  /* NB: If you need to access the 'secsize' equivalent for an extent,
+   * you should use CDIO_EXTENT_BLOCKS(extent_size[extent_nr]) */
+
   iso9660_xa_t       xa;              /**< XA attributes */
   enum { _STAT_FILE = 1, _STAT_DIR = 2 } type;
   bool               b_xa;
-  char         filename[EMPTY_ARRAY_SIZE]; /**< filename */
+  char               filename[EMPTY_ARRAY_SIZE];    /**< filename */
 };
 
 /** A mask used in iso9660_ifs_read_vd which allows what kinds

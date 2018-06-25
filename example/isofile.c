@@ -67,7 +67,7 @@ main(int argc, const char *argv[])
 {
   iso9660_stat_t *p_statbuf;
   FILE *p_outfd;
-  int i;
+  int i, j;
   char const *psz_image;
   char const *psz_fname;
   iso9660_t *p_iso;
@@ -115,29 +115,26 @@ main(int argc, const char *argv[])
     }
 
   /* Copy the blocks from the ISO-9660 filesystem to the local filesystem. */
-  {
-    const unsigned int i_blocks = CEILING(p_statbuf->size, ISO_BLOCKSIZE);
-    for (i = 0; i < i_blocks ; i++) 
-    {
+  for (j = 0; j < p_statbuf->num_extents; j++) {
+    const unsigned int i_blocks = CEILING(p_statbuf->extent_size[j], ISO_BLOCKSIZE);
+    for (i = 0; i < i_blocks ; i++) {
       char buf[ISO_BLOCKSIZE];
-      const lsn_t lsn = p_statbuf->lsn + i;
+      const lsn_t lsn = p_statbuf->extent_lsn[j] + i;
 
       memset (buf, 0, ISO_BLOCKSIZE);
-      
-      if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, lsn, 1) )
-      {
+
+      if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, lsn, 1) ) {
 	fprintf(stderr, "Error reading ISO 9660 file %s at LSN %lu\n",
 		psz_fname, (long unsigned int) lsn);
 	my_exit(4);
       }
-      
+
       fwrite (buf, ISO_BLOCKSIZE, 1, p_outfd);
-      
-      if (ferror (p_outfd))
-	{
-	  perror ("fwrite()");
-	  my_exit(5);
-	}
+
+      if (ferror (p_outfd)) {
+	perror ("fwrite()");
+	my_exit(5);
+      }
     }
   }
   
