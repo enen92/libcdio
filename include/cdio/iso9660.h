@@ -156,9 +156,6 @@ extern enum iso_vd_enum_s {
 /*! \brief Maximum number of characters in a volume-set id. */
 #define ISO_MAX_VOLUMESET_ID 128
 
-/*! \brief Maximum number of multi file extent licdio supports. */
-#define ISO_MAX_MULTIEXTENT 8
-
 /*! String inside frame which identifies an ISO 9660 filesystem. This
     string is the "id" field of an iso9660_pvd_t or an iso9660_svd_t.
 */
@@ -550,9 +547,9 @@ struct iso9660_stat_s { /* big endian!! */
                      /**v combined size of all extents, in bytes */
   uint64_t           total_size;
                      /**v start logical sector number for each extent */
-  lsn_t              extent_lsn[ISO_MAX_MULTIEXTENT];
+  lsn_t              *extent_lsn;
                      /**v size of each extent */
-  uint32_t           extent_size[ISO_MAX_MULTIEXTENT];
+  uint32_t           *extent_size;
   /* NB: If you need to access the 'secsize' equivalent for an extent,
    * you should use CDIO_EXTENT_BLOCKS(extent_size[extent_nr]) */
 

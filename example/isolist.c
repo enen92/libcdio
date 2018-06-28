@@ -70,7 +70,7 @@ main(int argc, const char *argv[])
   char const *psz_fname;
   iso9660_t *p_iso;
   const char *psz_path = "/";
-  char psz_extents[] = " [# extents]";
+  char psz_extents[] = " [4294967296 extents]"; /* enough room for uint32_t */
 
   if (argc > 1)
     psz_fname = argv[1];
@@ -109,7 +109,8 @@ main(int argc, const char *argv[])
       iso9660_name_translate(p_statbuf->filename, filename);
 
 	if (p_statbuf->num_extents > 1)
-	    psz_extents[2] = '0' + p_statbuf->num_extents;
+	    sprintf(psz_extents, " [%lu extents]",
+		    (unsigned long) p_statbuf->num_extents);
 	printf ("%s [LSN %8d] %12" PRIi64 " %s%s%s\n",
 		_STAT_DIR == p_statbuf->type ? "d" : "-",
 		p_statbuf->extent_lsn[0], p_statbuf->total_size, psz_path, filename,

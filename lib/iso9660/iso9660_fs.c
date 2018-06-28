@@ -99,6 +99,10 @@ static long int iso9660_seek_read_framesize (const iso9660_t *p_iso,
 					     long int size,
 					     uint16_t i_framesize);
 
+/*! \brief Maximum number of multi file extent licdio supports. */
+#define ISO_MAX_MULTIEXTENT 100
+
+
 /* Adjust the p_iso's i_datastart, i_byte_offset and i_framesize
    based on whether we find a frame header or not.
 */
@@ -775,11 +779,38 @@ iso9660_check_dir_block_end(iso9660_dir_t *p_iso9660_dir, unsigned *offset)
 }
 
 
+static bool
+_iso9660_statbuf_alloc_extents(iso9660_stat_t *p_stat, int num_extents)
+{
+  p_stat->extent_lsn = calloc(num_extents, sizeof(lsn_t));
+  if (p_stat->extent_lsn == NULL) {
+no_memory:;
+    cdio_warn("Could not allocate %lu bytes",
+             (unsigned long) num_extents * (sizeof(lsn_t) + sizeof(uint32_t)));
+    return false;
+  }
+  p_stat->extent_size = calloc(num_extents, sizeof(uint32_t));
+  if (p_stat->extent_size == NULL) {
+    free(p_stat->extent_lsn);
+    goto no_memory;
+  }
+  return true;
+}
 
+
+/*!
+   @param single_extent Submit true to allocate only a single extent.
+                        Submit false to allocate the maximum number of extents.
+                        In the latter case, call _iso9660_statbuf_adj_extents()
+                        when all extents are assessed.
+                        Rule of thumb: If last_p_stat is submitted as constant
+                        NULL, then single_extent should be true, else false.
+*/
 static iso9660_stat_t *
 _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
 			 iso9660_stat_t *last_p_stat,
-			 bool_3way_t b_xa, uint8_t u_joliet_level)
+			 bool_3way_t b_xa, uint8_t u_joliet_level,
+			 bool single_extent)
 {
   uint8_t dir_len= iso9660_get_dir_len(p_iso9660_dir);
   iso711_t i_fname;
@@ -802,6 +833,14 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
     cdio_warn("Couldn't calloc(1, %d)", stat_len);
     return NULL;
   }
+  if (last_p_stat == NULL) {
+    if (!_iso9660_statbuf_alloc_extents(p_stat, single_extent ?
+                                                1 : ISO_MAX_MULTIEXTENT)) {
+      free(p_stat);
+      return NULL;
+    }
+  }
+
   p_stat->type    = (p_iso9660_dir->file_flags & ISO_DIRECTORY)
     ? _STAT_DIR : _STAT_FILE;
   p_stat->extent_lsn[p_stat->num_extents] = from_733 (p_iso9660_dir->extent);
@@ -938,6 +977,28 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
 
 }
 
+
+static bool
+_iso9660_statbuf_adj_extents(iso9660_stat_t *p_stat)
+{
+  lsn_t *lsn;
+  uint32_t *sizes;
+
+  lsn = p_stat->extent_lsn;
+  sizes =  p_stat->extent_size;
+  if (!_iso9660_statbuf_alloc_extents(p_stat, p_stat->num_extents)) {
+    p_stat->extent_lsn = lsn;
+    p_stat->extent_size = sizes;
+    return false;
+  }
+  memcpy(p_stat->extent_lsn, lsn, p_stat->num_extents * sizeof(lsn_t));
+  memcpy(p_stat->extent_size, sizes, p_stat->num_extents * sizeof(uint32_t));
+  free(lsn);
+  free(sizes);
+  return true;
+}
+
+
 /*!
   Return the directory name stored in the iso9660_dir_t
 
@@ -1009,7 +1070,7 @@ _fs_stat_root (CdIo_t *p_cdio)
 #endif
 
     p_stat = _iso9660_dir_to_statbuf (p_iso9660_dir, NULL,
-				      b_xa, p_env->u_joliet_level);
+				      b_xa, p_env->u_joliet_level, true);
     return p_stat;
   }
 
@@ -1031,7 +1092,8 @@ _ifs_stat_root (iso9660_t *p_iso)
 
   p_stat = _iso9660_dir_to_statbuf (p_iso9660_dir, NULL,
 				    p_iso->b_xa,
-				    p_iso->u_joliet_level);
+				    p_iso->u_joliet_level,
+				    true);
   return p_stat;
 }
 
@@ -1085,7 +1147,7 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
 	continue;
 
       p_iso9660_stat = _iso9660_dir_to_statbuf (p_iso9660_dir, NULL,
-					dunno, p_env->u_joliet_level);
+					dunno, p_env->u_joliet_level, true);
 
       cmp = strcmp(splitpath[0], p_iso9660_stat->filename);
 
@@ -1181,7 +1243,8 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 	continue;
 
       p_stat = _iso9660_dir_to_statbuf (p_iso9660_dir, p_stat,
-					p_iso->b_xa, p_iso->u_joliet_level);
+					p_iso->b_xa, p_iso->u_joliet_level,
+					false);
 
       if (!p_stat) {
 	cdio_warn("Bad directory information for %s", splitpath[0]);
@@ -1192,6 +1255,11 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
       /* If we have multiextent file parts, loop until the last one */
       if (p_iso9660_dir->file_flags & ISO_MULTIEXTENT)
         continue;
+
+      if (!_iso9660_statbuf_adj_extents(p_stat)) {
+	free(_dirbuf);
+	return NULL;
+      }
 
       cmp = strcmp(splitpath[0], p_stat->filename);
 
@@ -1439,10 +1507,16 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
 
 	p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
 						 p_iso9660_stat, dunno,
-						 p_env->u_joliet_level);
+						 p_env->u_joliet_level,
+						 false);
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
+            if (!_iso9660_statbuf_adj_extents(p_stat)) {
+              iso9660_stat_free(p_stat);
+              iso9660_dirlist_free(retval);
+              return NULL;
+            }
 	    _cdio_list_append (retval, p_iso9660_stat);
 	    p_iso9660_stat = NULL;
 	  }
@@ -1524,10 +1598,17 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
 	p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
 						 p_iso9660_stat,
 						 p_iso->b_xa,
-						 p_iso->u_joliet_level);
+						 p_iso->u_joliet_level,
+						 false);
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
+	    if (!_iso9660_statbuf_adj_extents(p_stat)) {
+	      _cdio_list_free (retval, true, NULL);
+	      iso9660_stat_free(p_stat);
+	      free (_dirbuf);
+	      return NULL;
+	    }
 	    _cdio_list_append(retval, p_iso9660_stat);
 	    p_iso9660_stat = NULL;
 	  }
@@ -1739,6 +1820,8 @@ iso9660_stat_free(iso9660_stat_t *p_stat)
     if (p_stat->rr.psz_symlink) {
       CDIO_FREE_IF_NOT_NULL(p_stat->rr.psz_symlink);
     }
+    CDIO_FREE_IF_NOT_NULL(p_stat->extent_lsn);
+    CDIO_FREE_IF_NOT_NULL(p_stat->extent_size);
     free(p_stat);
   }
 }
@@ -1811,7 +1894,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
         continue;
 
       p_stat = _iso9660_dir_to_statbuf (p_iso9660_dir, NULL, p_iso->b_xa,
-					p_iso->u_joliet_level);
+					p_iso->u_joliet_level, true);
       have_rr = p_stat->rr.b3_rock;
       if ( have_rr != yep) {
         if (strlen(splitpath[0]) == 0)
