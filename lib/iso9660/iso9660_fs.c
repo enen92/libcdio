@@ -56,6 +56,7 @@
 #include "cdio_assert.h"
 #include "_cdio_stdio.h"
 #include "cdio_private.h"
+#include "iso9660_private.h"
 
 /** Implementation of iso9660_t type */
 struct _iso9660_s {
@@ -99,8 +100,66 @@ static long int iso9660_seek_read_framesize (const iso9660_t *p_iso,
 					     long int size,
 					     uint16_t i_framesize);
 
-/*! \brief Maximum number of multi file extent licdio supports. */
+/*! Maximum number of file extents. It gets allocated during creation of
+    iso9660_statv2_t and adjusted to the actually necessary size when
+    creation is complete.
+  */
 #define ISO_MAX_MULTIEXTENT 100
+
+/*! Number of bytes in the magic number of iso9660_statv2_s */
+#define ISO9660_STATV2_MAGIC_SIZE 1
+
+/*!
+   Internal representation of a file object.
+*/
+struct iso9660_statv2_s {
+
+  /** This must be the first member in the struct. The constructor must set
+      magic_number[0] to 0xFF to distinguish it from legacy iso9660_stat_s.
+  */
+  uint8_t magic_number[ISO9660_STATV2_MAGIC_SIZE];
+
+  /** Rock Ridge-specific fields  */
+  iso_rock_statbuf_t rr;
+
+  /** time on entry - FIXME merge with one of entries above, like ctime? */
+  struct tm          tm;
+
+  /** combined size of all extents, in bytes */
+  uint64_t           total_size;
+
+  /** number of extents */
+  uint32_t           num_extents;
+
+  /** array of extent descriptions */
+  struct iso9660_extent_descr_s *extents;
+
+  /** XA attributes */
+  iso9660_xa_t       xa;
+
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
+  /** file type: data file or directory */
+  enum iso9660_file_type_e type;
+#else
+  /** file type: data file (1 = _STAT_FILE) or directory (2 = _STAT_DIR) */
+  int                type;
+#endif
+
+  /** (probably whether xa is valid) */
+  bool               b_xa;
+
+  /** filename */
+  char               *filename;
+};
+
+/* >>> Find a better place to declare these functions.
+       Implemented in  lib/iso9660/rock.c
+ */
+bool iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
+                                         iso_rock_statbuf_t *source);
+bool iso9660_rock_statbuf_init(iso_rock_statbuf_t *target);
+void iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target);
+
 
 
 /* Adjust the p_iso's i_datastart, i_byte_offset and i_framesize
@@ -780,21 +839,138 @@ iso9660_check_dir_block_end(iso9660_dir_t *p_iso9660_dir, unsigned *offset)
 
 
 static bool
-_iso9660_statbuf_alloc_extents(iso9660_stat_t *p_stat, int num_extents)
+_iso9660_demand_statv2(iso9660_statv2_t *p_stat, const char *func_name)
 {
-  p_stat->extent_lsn = calloc(num_extents, sizeof(lsn_t));
-  if (p_stat->extent_lsn == NULL) {
-no_memory:;
-    cdio_warn("Could not allocate %lu bytes",
-             (unsigned long) num_extents * (sizeof(lsn_t) + sizeof(uint32_t)));
+  if (NULL == p_stat)
+    return false;
+
+#ifndef ISO9660_STATV2_NO_RUNTIME_CHECK
+
+  /* Look for first byte of magic number of iso9660_statv2_t */
+  if (0xFF != ((uint8_t *) p_stat)[0]) {
+    cdio_warn("Probable programming error with using %s : Detected non-iso9660_statv2_t", func_name);
     return false;
   }
-  p_stat->extent_size = calloc(num_extents, sizeof(uint32_t));
-  if (p_stat->extent_size == NULL) {
-    free(p_stat->extent_lsn);
-    goto no_memory;
+
+#endif /* ! ISO9660_STATV2_NO_RUNTIME_CHECK */
+
+  return true;
+}
+
+
+static bool
+_iso9660_statbuf_alloc_extents(iso9660_statv2_t *p_stat, int num_extents)
+{
+  p_stat->extents = calloc(num_extents, sizeof(iso9660_extent_descr_t));
+  if (p_stat->extents == NULL) {
+    cdio_warn("Could not allocate %lu bytes",
+             (unsigned long) num_extents * sizeof(iso9660_extent_descr_t));
+    return false;
   }
   return true;
+}
+
+
+static bool
+iso9660_statv2_set_filename(iso9660_statv2_t *p_stat, char *name,
+                            int name_len)
+{
+  int siz;
+
+  if (name_len < 0)
+    siz = strlen(name) + 1;
+  else
+    siz = name_len + 1;
+  CDIO_FREE_IF_NOT_NULL(p_stat->filename);
+  p_stat->filename = calloc(1, siz);
+  if (NULL == p_stat) {
+    cdio_warn(
+	 "Could not allocate memory for iso9660_statv2_t.filename of %d bytes",
+	 siz);
+    return false;
+  }
+  if (siz > 1)
+    memcpy(p_stat->filename, name, siz - 1);
+  p_stat->filename[siz - 1] = 0;
+  return true;
+}
+
+
+/*!
+   @param single_extent Submit true to allocate only a single extent.
+                        Submit false to allocate the maximum number of extents.
+*/
+static iso9660_statv2_t *
+iso9660_statv2_new(bool single_extent)
+{
+  iso9660_statv2_t *p_stat;
+
+  p_stat = calloc(1, sizeof(iso9660_statv2_t));
+  if (NULL == p_stat) {
+    cdio_warn("Could not allocate memory for new iso9660_statv2_t object");
+    return NULL;
+  }
+  p_stat->magic_number[0] = 0xff;
+  p_stat->magic_number[1] = 2;
+  p_stat->extents = NULL;
+  p_stat->filename = NULL;
+
+  if (!iso9660_rock_statbuf_init(&(p_stat->rr))) {
+    free(p_stat); /* intentionally not iso9660_statv2_free() */
+    return NULL;
+  }
+
+  if (!_iso9660_statbuf_alloc_extents(p_stat, single_extent ?
+					      1 : ISO_MAX_MULTIEXTENT)) {
+    free(p_stat); /* intentionally not iso9660_statv2_free() */
+    return NULL;
+  }
+  return p_stat;
+}
+
+
+static iso9660_statv2_t *
+iso9660_statv2_clone(iso9660_statv2_t *orig)
+{
+  iso9660_statv2_t *p_stat; 
+
+  cdio_assert (_iso9660_demand_statv2(orig, "iso9660_statv2_clone"));
+
+  p_stat = calloc(1, sizeof(iso9660_statv2_t));
+  if (NULL == p_stat) {
+no_memory:;
+    cdio_warn("Could not allocate memory for cloning an iso9660_statv2_t");
+    return NULL;
+  }
+  /* copy all unmanaged memory and then re-initialize managed pointers */
+  memcpy(p_stat, orig, sizeof(iso9660_statv2_t));
+
+  p_stat->extents = NULL;
+  p_stat->filename = NULL;
+
+  if (!iso9660_rock_statbuf_init(&(p_stat->rr))) {
+    free(p_stat); /* intentionally not iso9660_statv2_free() */
+    return NULL;
+  }
+
+  if (!iso9660_rock_statbuf_clone_entrails(&(p_stat->rr), &(orig->rr))) {
+    free(p_stat); /* intentionally not iso9660_statv2_free() */
+    goto no_memory;
+  }
+
+  if (!_iso9660_statbuf_alloc_extents(p_stat, orig->num_extents)) {
+    iso9660_statv2_free(p_stat);
+    goto no_memory;
+  }
+  memcpy(p_stat->extents, orig->extents,
+         orig->num_extents * sizeof(struct iso9660_extent_descr_s));
+
+  if (!iso9660_statv2_set_filename(p_stat, orig->filename, -1)) {
+    iso9660_statv2_free(p_stat);
+    goto no_memory;
+  }
+
+  return p_stat;
 }
 
 
@@ -806,16 +982,15 @@ no_memory:;
                         Rule of thumb: If last_p_stat is submitted as constant
                         NULL, then single_extent should be true, else false.
 */
-static iso9660_stat_t *
+static iso9660_statv2_t *
 _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
-			 iso9660_stat_t *last_p_stat,
+			 iso9660_statv2_t *last_p_stat,
 			 bool_3way_t b_xa, uint8_t u_joliet_level,
 			 bool single_extent)
 {
   uint8_t dir_len= iso9660_get_dir_len(p_iso9660_dir);
   iso711_t i_fname;
-  unsigned int stat_len;
-  iso9660_stat_t *p_stat = last_p_stat;
+  iso9660_statv2_t *p_stat = last_p_stat;
   char rr_fname[256] = "";
   int  i_rr_fname;
 
@@ -823,39 +998,20 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
 
   i_fname = from_711(p_iso9660_dir->filename.len);
 
-  /* .. string in statbuf is one longer than in p_iso9660_dir's listing '\1' */
-  stat_len = sizeof(iso9660_stat_t) + i_fname + 2;
-
-  /* Reuse multiextent p_stat if not NULL */
-  if (!p_stat)
-    p_stat = calloc(1, stat_len);
-  if (!p_stat) {
-    cdio_warn("Couldn't calloc(1, %d)", stat_len);
-    return NULL;
-  }
-  if (last_p_stat == NULL) {
-    if (!_iso9660_statbuf_alloc_extents(p_stat, single_extent ?
-                                                1 : ISO_MAX_MULTIEXTENT)) {
-      free(p_stat);
+  /* (if p_stat is not NULL, then it will be re-used to add more extents) */
+  if (NULL == p_stat) {
+    p_stat = iso9660_statv2_new(single_extent);
+    if (!p_stat)
       return NULL;
-    }
   }
 
   p_stat->type    = (p_iso9660_dir->file_flags & ISO_DIRECTORY)
     ? _STAT_DIR : _STAT_FILE;
-  p_stat->extent_lsn[p_stat->num_extents] = from_733 (p_iso9660_dir->extent);
-  p_stat->extent_size[p_stat->num_extents] = from_733 (p_iso9660_dir->size);
-  p_stat->total_size += p_stat->extent_size[p_stat->num_extents];
+  p_stat->extents[p_stat->num_extents].lsn = from_733 (p_iso9660_dir->extent);
+  p_stat->extents[p_stat->num_extents].size = from_733 (p_iso9660_dir->size);
+  p_stat->total_size += p_stat->extents[p_stat->num_extents].size;
   p_stat->rr.b3_rock = dunno; /*FIXME should do based on mask */
   p_stat->b_xa    = false;
-
-#ifndef DO_NOT_WANT_COMPATIBILITY
-  if (p_stat->num_extents == 0) {
-    p_stat->lsn = p_stat->extent_lsn[0];
-    p_stat->size = p_stat->extent_size[0];
-    p_stat->secsize = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
-  }
-#endif /* DO_NOT_WANT_COMPATIBILITY */
 
   /* Only resolve the full filename when we're not dealing with extent */
   if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
@@ -864,65 +1020,57 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
     if (p_stat->num_extents != 0) {
       if (strcmp(p_stat->filename, &p_iso9660_dir->filename.str[1]) != 0) {
 	cdio_warn("Non consecutive multiextent file parts for '%s'", p_stat->filename);
-	free(p_stat);
-	return NULL;
+	goto fail;
       }
     }
     i_rr_fname =
 #ifdef HAVE_ROCK
-      get_rock_ridge_filename(p_iso9660_dir, rr_fname, p_stat);
+      get_rock_ridge_filename_rr(p_iso9660_dir, rr_fname, &(p_stat->rr));
 #else
       0;
 #endif
 
     if (i_rr_fname > 0) {
-      if (i_rr_fname > i_fname) {
-	/* realloc gives valgrind errors */
-	iso9660_stat_t *p_stat_new =
-	  calloc(1, sizeof(iso9660_stat_t)+i_rr_fname+2);
-        if (!p_stat_new)
-          {
-          cdio_warn("Couldn't calloc(1, %d)", (int)(sizeof(iso9660_stat_t)+i_rr_fname+2));
-	  free(p_stat);
-          return NULL;
-          }
-	memcpy(p_stat_new, p_stat, stat_len);
-	free(p_stat);
-	p_stat = p_stat_new;
-      }
-      strncpy(p_stat->filename, rr_fname, i_rr_fname+1);
+      if (!iso9660_statv2_set_filename(p_stat, rr_fname, i_rr_fname))
+	goto fail;
     } else {
-      if ('\0' == p_iso9660_dir->filename.str[1] && 1 == i_fname)
-	strncpy (p_stat->filename, ".", sizeof("."));
-      else if ('\1' == p_iso9660_dir->filename.str[1] && 1 == i_fname)
-	strncpy (p_stat->filename, "..", sizeof(".."));
+      if ('\0' == p_iso9660_dir->filename.str[1] && 1 == i_fname) {
+	if (!iso9660_statv2_set_filename(p_stat, (char *) ".", -1))
+	  goto fail;
+      } else if ('\1' == p_iso9660_dir->filename.str[1] && 1 == i_fname) {
+	if (!iso9660_statv2_set_filename(p_stat, (char *) "..", -1))
+	  goto fail;
 #ifdef HAVE_JOLIET
-      else if (u_joliet_level) {
+      } else if (u_joliet_level) {
 	int i_inlen = i_fname;
 	cdio_utf8_t *p_psz_out = NULL;
 	if (cdio_charset_to_utf8(&p_iso9660_dir->filename.str[1], i_inlen,
                              &p_psz_out, "UCS-2BE")) {
-          strncpy(p_stat->filename, p_psz_out, i_fname);
+	  if (!iso9660_statv2_set_filename(p_stat, p_psz_out, i_fname))
+	    goto fail;
           free(p_psz_out);
         }
         else {
-          free(p_stat);
+          iso9660_statv2_free(p_stat);
           return NULL;
         }
-      }
 #endif /*HAVE_JOLIET*/
-      else {
-	strncpy (p_stat->filename, &p_iso9660_dir->filename.str[1], i_fname);
+      } else {
+	if (!iso9660_statv2_set_filename(p_stat,
+                                   &(p_iso9660_dir->filename.str[1]), i_fname))
+	  goto fail;
       }
     }
   } else {
       /* Use the plain ISO-9660 name when dealing with a multiextent file part */
-      strncpy(p_stat->filename, &p_iso9660_dir->filename.str[1], i_fname);
+      if (!iso9660_statv2_set_filename(p_stat,
+                                   &(p_iso9660_dir->filename.str[1]), i_fname))
+	  goto fail;
   }
   if (p_stat->num_extents >= ISO_MAX_MULTIEXTENT) {
-      cdio_warn("Warning: Too many multiextent file parts for '%s'", p_stat->filename);
-      free(p_stat->rr.psz_symlink);
-      free(p_stat);
+      cdio_warn("Warning: Too many multiextent file parts for '%s'",
+		p_stat->filename);
+      iso9660_statv2_free(p_stat);
       return NULL;
   }
   p_stat->num_extents++;
@@ -930,7 +1078,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   iso9660_get_dtime(&(p_iso9660_dir->recording_time), true, &(p_stat->tm));
 
   if (dir_len < sizeof (iso9660_dir_t)) {
-    iso9660_stat_free(p_stat);
+    iso9660_statv2_free(p_stat);
     return NULL;
   }
 
@@ -975,26 +1123,25 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   }
   return p_stat;
 
+fail:
+  iso9660_statv2_free(p_stat);
+  return NULL;
 }
 
 
 static bool
-_iso9660_statbuf_adj_extents(iso9660_stat_t *p_stat)
+_iso9660_statbuf_adj_extents(iso9660_statv2_t *p_stat)
 {
-  lsn_t *lsn;
-  uint32_t *sizes;
+  iso9660_extent_descr_t *extents;
 
-  lsn = p_stat->extent_lsn;
-  sizes =  p_stat->extent_size;
+  extents = p_stat->extents;
   if (!_iso9660_statbuf_alloc_extents(p_stat, p_stat->num_extents)) {
-    p_stat->extent_lsn = lsn;
-    p_stat->extent_size = sizes;
+    p_stat->extents = extents;
     return false;
   }
-  memcpy(p_stat->extent_lsn, lsn, p_stat->num_extents * sizeof(lsn_t));
-  memcpy(p_stat->extent_size, sizes, p_stat->num_extents * sizeof(uint32_t));
-  free(lsn);
-  free(sizes);
+  memcpy(p_stat->extents, extents,
+         p_stat->num_extents * sizeof(iso9660_extent_descr_t));
+  free(extents);
   return true;
 }
 
@@ -1028,7 +1175,7 @@ iso9660_dir_to_name (const iso9660_dir_t *iso9660_dir)
 /*
    Return a pointer to a ISO 9660 stat buffer or NULL if there's an error
 */
-static iso9660_stat_t *
+static iso9660_statv2_t *
 _fs_stat_root (CdIo_t *p_cdio)
 {
 
@@ -1038,7 +1185,7 @@ _fs_stat_root (CdIo_t *p_cdio)
     iso_extension_mask_t iso_extension_mask = ISO_EXTENSION_ALL;
     generic_img_private_t *p_env = (generic_img_private_t *) p_cdio->env;
     iso9660_dir_t *p_iso9660_dir;
-    iso9660_stat_t *p_stat;
+    iso9660_statv2_t *p_stat;
     bool_3way_t b_xa;
 
     if (!p_env->u_joliet_level)
@@ -1076,10 +1223,10 @@ _fs_stat_root (CdIo_t *p_cdio)
 
 }
 
-static iso9660_stat_t *
+static iso9660_statv2_t *
 _ifs_stat_root (iso9660_t *p_iso)
 {
-  iso9660_stat_t *p_stat;
+  iso9660_statv2_t *p_stat;
   iso9660_dir_t *p_iso9660_dir;
 
 #ifdef HAVE_JOLIET
@@ -1097,26 +1244,19 @@ _ifs_stat_root (iso9660_t *p_iso)
   return p_stat;
 }
 
-static iso9660_stat_t *
-_fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
+static iso9660_statv2_t *
+_fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_statv2_t *_root,
 		   char **splitpath)
 {
   unsigned offset = 0;
   uint8_t *_dirbuf = NULL;
   uint32_t blocks;
-  iso9660_stat_t *p_stat;
+  iso9660_statv2_t *p_stat;
   generic_img_private_t *p_env = (generic_img_private_t *) p_cdio->env;
 
   if (!splitpath[0])
     {
-      unsigned int len=sizeof(iso9660_stat_t) + strlen(_root->filename)+1;
-      p_stat = calloc(1, len);
-      cdio_assert (p_stat != NULL);
-      memcpy(p_stat, _root, len);
-      p_stat->rr.psz_symlink = calloc(1, p_stat->rr.i_symlink_max);
-      cdio_assert (p_stat->rr.psz_symlink != NULL);
-      memcpy(p_stat->rr.psz_symlink, _root->rr.psz_symlink,
-	     p_stat->rr.i_symlink_max);
+      p_stat = iso9660_statv2_clone((iso9660_statv2_t *) _root);
       return p_stat;
     }
 
@@ -1124,7 +1264,7 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
     return NULL;
 
   cdio_assert (_root->type == _STAT_DIR);
-  blocks = CDIO_EXTENT_BLOCKS(_root->extent_size[0]);
+  blocks = CDIO_EXTENT_BLOCKS(_root->extents[0].size);
 
   _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
   if (!_dirbuf)
@@ -1133,14 +1273,14 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
     return NULL;
     }
 
-  if (cdio_read_data_sectors (p_cdio, _dirbuf, _root->extent_lsn[0], ISO_BLOCKSIZE,
-			      blocks))
+  if (cdio_read_data_sectors (p_cdio, _dirbuf, _root->extents[0].lsn,
+			      ISO_BLOCKSIZE, blocks))
       return NULL;
 
   while (offset < (blocks * ISO_BLOCKSIZE))
     {
       iso9660_dir_t *p_iso9660_dir = (void *) &_dirbuf[offset];
-      iso9660_stat_t *p_iso9660_stat;
+      iso9660_statv2_t *p_iso9660_stat;
       int cmp;
 
       if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
@@ -1161,7 +1301,7 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
 	  if (!trans_fname) {
 	    cdio_warn("can't allocate %lu bytes",
 		      (long unsigned int) strlen(p_iso9660_stat->filename));
-	    free(p_iso9660_stat);
+	    iso9660_statv2_free(p_iso9660_stat);
 	    return NULL;
 	  }
 	  iso9660_name_translate_ext(p_iso9660_stat->filename, trans_fname,
@@ -1172,14 +1312,14 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
       }
 
       if (!cmp) {
-	iso9660_stat_t *ret_stat
+	iso9660_statv2_t *ret_stat
 	  = _fs_stat_traverse (p_cdio, p_iso9660_stat, &splitpath[1]);
-	iso9660_stat_free(p_iso9660_stat);
+	iso9660_statv2_free(p_iso9660_stat);
 	free (_dirbuf);
 	return ret_stat;
       }
 
-      iso9660_stat_free(p_iso9660_stat);
+      iso9660_statv2_free(p_iso9660_stat);
 
       offset += iso9660_get_dir_len(p_iso9660_dir);
     }
@@ -1191,27 +1331,20 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
   return NULL;
 }
 
-static iso9660_stat_t *
-_fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
+static iso9660_statv2_t *
+_fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_statv2_t *_root,
 		       char **splitpath)
 {
   unsigned offset = 0;
   uint8_t *_dirbuf = NULL;
   uint32_t blocks; 
   int ret, cmp;
-  iso9660_stat_t *p_stat = NULL;
+  iso9660_statv2_t *p_stat = NULL;
   iso9660_dir_t *p_iso9660_dir = NULL;
 
   if (!splitpath[0])
     {
-      unsigned int len=sizeof(iso9660_stat_t) + strlen(_root->filename)+1;
-      p_stat = calloc(1, len);
-      cdio_assert (p_stat != NULL);
-      memcpy(p_stat, _root, len);
-      p_stat->rr.psz_symlink = calloc(1, p_stat->rr.i_symlink_max);
-      cdio_assert (p_stat->rr.psz_symlink != NULL);
-      memcpy(p_stat->rr.psz_symlink, _root->rr.psz_symlink,
-	     p_stat->rr.i_symlink_max);
+      p_stat = iso9660_statv2_clone((iso9660_statv2_t *) _root);
       return p_stat;
     }
 
@@ -1220,7 +1353,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 
   cdio_assert (_root->type == _STAT_DIR);
 
-  blocks = CDIO_EXTENT_BLOCKS(_root->extent_size[0]);
+  blocks = CDIO_EXTENT_BLOCKS(_root->extents[0].size);
   _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
   if (!_dirbuf)
     {
@@ -1228,7 +1361,8 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
     return NULL;
     }
 
-  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->extent_lsn[0], blocks);
+  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->extents[0].lsn,
+			       blocks);
   if (ret != blocks * ISO_BLOCKSIZE) {
     free(_dirbuf);
     return NULL;
@@ -1258,6 +1392,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 
       if (!_iso9660_statbuf_adj_extents(p_stat)) {
 	free(_dirbuf);
+	iso9660_statv2_free(p_stat);
 	return NULL;
       }
 
@@ -1273,7 +1408,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 	  if (!trans_fname) {
 	    cdio_warn("can't allocate %lu bytes",
 		      (long unsigned int) strlen(p_stat->filename));
-	    free(p_stat);
+	    iso9660_statv2_free(p_stat);
 	    return NULL;
 	  }
 	  iso9660_name_translate_ext(p_stat->filename, trans_fname,
@@ -1284,13 +1419,13 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
       }
 
       if (!cmp) {
-	iso9660_stat_t *ret_stat
+	iso9660_statv2_t *ret_stat
 	  = _fs_iso_stat_traverse (p_iso, p_stat, &splitpath[1]);
-	iso9660_stat_free(p_stat);
+	iso9660_statv2_free(p_stat);
 	free (_dirbuf);
 	return ret_stat;
       }
-      iso9660_stat_free(p_stat);
+      iso9660_statv2_free(p_stat);
       p_stat = NULL;
     }
 
@@ -1316,15 +1451,15 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
   latter may give more complete information. "/" will take information
   from the PVD only, whereas "/." will force a directory read of "/" and
   find "." and in that Rock-Ridge information might be found which fills
-  in more stat information. Ideally iso9660_fs_stat should be fixed.
+  in more stat information. Ideally iso9660_fs_statv2 should be fixed.
   Patches anyone?
  */
-iso9660_stat_t *
-iso9660_fs_stat (CdIo_t *p_cdio, const char psz_path[])
+iso9660_statv2_t *
+iso9660_fs_statv2 (CdIo_t *p_cdio, const char psz_path[])
 {
-  iso9660_stat_t *p_root;
+  iso9660_statv2_t *p_root;
   char **p_psz_splitpath;
-  iso9660_stat_t *p_stat;
+  iso9660_statv2_t *p_stat;
 
   if (!p_cdio)   return NULL;
   if (!psz_path) return NULL;
@@ -1335,15 +1470,15 @@ iso9660_fs_stat (CdIo_t *p_cdio, const char psz_path[])
 
   p_psz_splitpath = _cdio_strsplit (psz_path, '/');
   p_stat = _fs_stat_traverse (p_cdio, p_root, p_psz_splitpath);
-  free(p_root);
+  iso9660_statv2_free(p_root);
   _cdio_strfreev (p_psz_splitpath);
 
   return p_stat;
 }
 
-typedef iso9660_stat_t * (stat_root_t) (void *p_image);
-typedef iso9660_stat_t * (stat_traverse_t)
-  (const void *p_image, const iso9660_stat_t *_root, char **splitpath);
+typedef iso9660_statv2_t * (statv2_root_t) (void *p_image);
+typedef iso9660_statv2_t * (statv2_traverse_t)
+  (const void *p_image, const iso9660_statv2_t *_root, char **splitpath);
 
 /*!
   Get file status for psz_path into stat. NULL is returned on error.
@@ -1351,14 +1486,14 @@ typedef iso9660_stat_t * (stat_traverse_t)
   name are dropped, i.e. ;1 is removed and if level 1 ISO-9660 names
   are lowercased.
  */
-static iso9660_stat_t *
-fs_stat_translate (void *p_image, stat_root_t stat_root,
-		   stat_traverse_t stat_traverse,
+static iso9660_statv2_t *
+fs_stat_translate (void *p_image, statv2_root_t stat_root,
+		   statv2_traverse_t stat_traverse,
 		   const char psz_path[])
 {
-  iso9660_stat_t *p_root;
+  iso9660_statv2_t *p_root;
   char **p_psz_splitpath;
-  iso9660_stat_t *p_stat;
+  iso9660_statv2_t *p_stat;
 
   if (!p_image)  return NULL;
   if (!psz_path) return NULL;
@@ -1368,7 +1503,7 @@ fs_stat_translate (void *p_image, stat_root_t stat_root,
 
   p_psz_splitpath = _cdio_strsplit (psz_path, '/');
   p_stat = stat_traverse (p_image, p_root, p_psz_splitpath);
-  free(p_root);
+  iso9660_statv2_free(p_root);
   _cdio_strfreev (p_psz_splitpath);
 
   return p_stat;
@@ -1384,14 +1519,14 @@ fs_stat_translate (void *p_image, stat_root_t stat_root,
   @param psz_path filename path to look up and get information about
 
   @return ISO 9660 file information.  The caller must free the
-  returned result using iso9660_stat_free().
+  returned result using iso9660_statv2_free().
 
  */
-iso9660_stat_t *
-iso9660_fs_stat_translate (CdIo_t *p_cdio, const char psz_path[])
+iso9660_statv2_t *
+iso9660_fs_statv2_translate (CdIo_t *p_cdio, const char psz_path[])
 {
-  return fs_stat_translate(p_cdio, (stat_root_t *) _fs_stat_root,
-			   (stat_traverse_t *) _fs_stat_traverse,
+  return fs_stat_translate(p_cdio, (statv2_root_t *) _fs_stat_root,
+			   (statv2_traverse_t *) _fs_stat_traverse,
 			   psz_path);
 }
 
@@ -1403,13 +1538,13 @@ iso9660_fs_stat_translate (CdIo_t *p_cdio, const char psz_path[])
   @return file status for path name psz_path. NULL is returned on
   error.  pathname version numbers in the ISO 9660 name are dropped,
   i.e. ;1 is removed and if level 1 ISO-9660 names are lowercased.
-  The caller must free the returned result using iso9660_stat_free().
+  The caller must free the returned result using iso9660_statv2_free().
  */
-iso9660_stat_t *
-iso9660_ifs_stat_translate (iso9660_t *p_iso, const char psz_path[])
+iso9660_statv2_t *
+iso9660_ifs_statv2_translate (iso9660_t *p_iso, const char psz_path[])
 {
-  return fs_stat_translate(p_iso, (stat_root_t *) _ifs_stat_root,
-			   (stat_traverse_t *) _fs_iso_stat_traverse,
+  return fs_stat_translate(p_iso, (statv2_root_t *) _ifs_stat_root,
+			   (statv2_traverse_t *) _fs_iso_stat_traverse,
 			   psz_path);
 }
 
@@ -1421,14 +1556,14 @@ iso9660_ifs_stat_translate (iso9660_t *p_iso, const char psz_path[])
   @param pzs_path path the look up
 
   @return file status for pathname. NULL is returned on error.
-  The caller must free the returned result using iso9660_stat_free().
+  The caller must free the returned result using iso9660_statv2_free().
  */
-iso9660_stat_t *
-iso9660_ifs_stat (iso9660_t *p_iso, const char psz_path[])
+iso9660_statv2_t *
+iso9660_ifs_statv2 (iso9660_t *p_iso, const char psz_path[])
 {
-  iso9660_stat_t *p_root;
+  iso9660_statv2_t *p_root;
   char **splitpath;
-  iso9660_stat_t *stat;
+  iso9660_statv2_t *stat;
 
   if (!p_iso)    return NULL;
   if (!psz_path) return NULL;
@@ -1438,14 +1573,14 @@ iso9660_ifs_stat (iso9660_t *p_iso, const char psz_path[])
 
   splitpath = _cdio_strsplit (psz_path, '/');
   stat = _fs_iso_stat_traverse (p_iso, p_root, splitpath);
-  free(p_root);
+  iso9660_statv2_free(p_root);
   _cdio_strfreev (splitpath);
 
   return stat;
 }
 
 /*!
-  Read psz_path (a directory) and return a list of iso9660_stat_t
+  Read psz_path (a directory) and return a list of iso9660_statv2_t
   pointers for the files inside that directory.
 
   @param p_cdio the CD object to read from
@@ -1453,47 +1588,47 @@ iso9660_ifs_stat (iso9660_t *p_iso, const char psz_path[])
   @param pzs_path path the read the directory from.
 
   @return file status for psz_path. The caller must free the
-  The caller must free the returned result using iso9660_stat_free().
+  The caller must free the returned result using iso9660_statv2_free().
 */
-CdioISO9660FileList_t *
-iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
+CdioISO9660FileListV2_t *
+iso9660_fs_readdir_v2 (CdIo_t *p_cdio, const char psz_path[])
 {
   generic_img_private_t *p_env;
   iso9660_dir_t *p_iso9660_dir;
-  iso9660_stat_t *p_iso9660_stat = NULL;
-  iso9660_stat_t *p_stat;
+  iso9660_statv2_t *p_iso9660_stat = NULL;
+  iso9660_statv2_t *p_stat;
 
   if (!p_cdio)   return NULL;
   if (!psz_path) return NULL;
 
   p_env = (generic_img_private_t *) p_cdio->env;
 
-  p_stat = iso9660_fs_stat (p_cdio, psz_path);
+  p_stat = iso9660_fs_statv2 (p_cdio, psz_path);
   if (!p_stat) return NULL;
 
   if (p_stat->type != _STAT_DIR) {
-    iso9660_stat_free(p_stat);
+    iso9660_statv2_free(p_stat);
     return NULL;
   }
 
   {
     unsigned offset = 0;
     uint8_t *_dirbuf = NULL;
-    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
+    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extents[0].size);
     CdioISO9660DirList_t *retval = _cdio_list_new ();
 
     _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
     if (!_dirbuf)
       {
       cdio_warn("Couldn't calloc(1, %d)", blocks * ISO_BLOCKSIZE);
-      iso9660_stat_free(p_stat);
+      iso9660_statv2_free(p_stat);
       iso9660_dirlist_free(retval);
       return NULL;
       }
 
-    if (cdio_read_data_sectors (p_cdio, _dirbuf, p_stat->extent_lsn[0],
+    if (cdio_read_data_sectors (p_cdio, _dirbuf, p_stat->extents[0].lsn,
 				ISO_BLOCKSIZE, blocks)) {
-      iso9660_stat_free(p_stat);
+      iso9660_statv2_free(p_stat);
       iso9660_dirlist_free(retval);
       return NULL;
     }
@@ -1512,8 +1647,8 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
-            if (!_iso9660_statbuf_adj_extents(p_stat)) {
-              iso9660_stat_free(p_stat);
+            if (!_iso9660_statbuf_adj_extents(p_iso9660_stat)) {
+              iso9660_statv2_free(p_stat);
               iso9660_dirlist_free(retval);
               return NULL;
             }
@@ -1527,30 +1662,30 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
     cdio_assert (offset == (blocks * ISO_BLOCKSIZE));
 
     free(_dirbuf);
-    iso9660_stat_free(p_stat);
+    iso9660_statv2_free(p_stat);
     return retval;
   }
 }
 
 /*!
-  Read psz_path (a directory) and return a list of iso9660_stat_t
+  Read psz_path (a directory) and return a list of iso9660_statv2_t
   of the files inside that. The caller must free the returned result.
 */
-CdioISO9660FileList_t *
-iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
+CdioISO9660FileListV2_t *
+iso9660_ifs_readdir_v2 (iso9660_t *p_iso, const char psz_path[])
 {
   iso9660_dir_t *p_iso9660_dir;
-  iso9660_stat_t *p_iso9660_stat = NULL;
-  iso9660_stat_t *p_stat;
+  iso9660_statv2_t *p_iso9660_stat = NULL;
+  iso9660_statv2_t *p_stat;
 
   if (!p_iso)    return NULL;
   if (!psz_path) return NULL;
 
-  p_stat = iso9660_ifs_stat (p_iso, psz_path);
+  p_stat = iso9660_ifs_statv2 (p_iso, psz_path);
   if (!p_stat)   return NULL;
 
   if (p_stat->type != _STAT_DIR) {
-    iso9660_stat_free(p_stat);
+    iso9660_statv2_free(p_stat);
     return NULL;
   }
 
@@ -1558,7 +1693,7 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
     long int ret;
     unsigned offset = 0;
     uint8_t *_dirbuf = NULL;
-    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
+    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extents[0].size);
     CdioList_t *retval = _cdio_list_new ();
     const size_t dirbuf_len = blocks * ISO_BLOCKSIZE;
 
@@ -1566,7 +1701,7 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
     if (!dirbuf_len)
       {
         cdio_warn("Invalid directory buffer sector size %u", blocks);
-	iso9660_stat_free(p_stat);
+	iso9660_statv2_free(p_stat);
 	_cdio_list_free (retval, true, NULL);
         return NULL;
       }
@@ -1575,15 +1710,16 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
     if (!_dirbuf)
       {
         cdio_warn("Couldn't calloc(1, %lu)", (unsigned long)dirbuf_len);
-	iso9660_stat_free(p_stat);
+	iso9660_statv2_free(p_stat);
 	_cdio_list_free (retval, true, NULL);
         return NULL;
       }
 
-    ret = iso9660_iso_seek_read (p_iso, _dirbuf, p_stat->extent_lsn[0], blocks);
+    ret = iso9660_iso_seek_read (p_iso, _dirbuf, p_stat->extents[0].lsn,
+				 blocks);
     if (ret != dirbuf_len) 	  {
       _cdio_list_free (retval, true, NULL);
-      iso9660_stat_free(p_stat);
+      iso9660_statv2_free(p_stat);
       free (_dirbuf);
       return NULL;
     }
@@ -1603,9 +1739,9 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
-	    if (!_iso9660_statbuf_adj_extents(p_stat)) {
+	    if (!_iso9660_statbuf_adj_extents(p_iso9660_stat)) {
 	      _cdio_list_free (retval, true, NULL);
-	      iso9660_stat_free(p_stat);
+	      iso9660_statv2_free(p_stat);
 	      free (_dirbuf);
 	      return NULL;
 	    }
@@ -1617,10 +1753,10 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
       }
 
     free (_dirbuf);
-    iso9660_stat_free(p_stat);
+    iso9660_statv2_free(p_stat);
 
     if (offset != dirbuf_len) {
-      _cdio_list_free (retval, true, (CdioDataFree_t) iso9660_stat_free);
+      _cdio_list_free (retval, true, (CdioDataFree_t) iso9660_statv2_free);
       return NULL;
     }
 
@@ -1628,26 +1764,26 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
   }
 }
 
-typedef CdioISO9660FileList_t * (iso9660_readdir_t)
+typedef CdioISO9660FileListV2_t * (iso9660_readdir_t)
   (void *p_image,  const char * psz_path);
 
-CdioISO9660FileList_t *
-iso9660_filelist_new(void) {
-  return (CdioISO9660FileList_t *) _cdio_list_new ();
+CdioISO9660FileListV2_t *
+iso9660_filelist_new_v2(void) {
+  return (CdioISO9660FileListV2_t *) _cdio_list_new ();
 }
 
 CdioISO9660DirList_t *
 iso9660_dirlist_new(void) {
-  return (CdioISO9660FileList_t *) _cdio_list_new ();
+  return (CdioISO9660DirList_t *) _cdio_list_new ();
 }
 
-static iso9660_stat_t *
+static iso9660_statv2_t *
 find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
 		  const char psz_path[], lsn_t lsn,
 		  /*out*/ char **ppsz_full_filename)
 {
-  CdioISO9660FileList_t *entlist = iso9660_readdir (p_image, psz_path);
-  CdioISO9660DirList_t *dirlist = iso9660_filelist_new();
+  CdioISO9660FileListV2_t *entlist = iso9660_readdir (p_image, psz_path);
+  CdioISO9660DirList_t *dirlist = iso9660_dirlist_new();
   CdioListNode_t *entnode;
 
   cdio_assert (entlist != NULL);
@@ -1656,7 +1792,7 @@ find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
 
   _CDIO_LIST_FOREACH (entnode, entlist)
     {
-      iso9660_stat_t *statbuf = _cdio_list_node_data (entnode);
+      iso9660_statv2_t *statbuf = _cdio_list_node_data (entnode);
       const char *psz_filename  = (char *) statbuf->filename;
       unsigned int len = strlen(psz_path) + strlen(psz_filename)+2;
       size_t extent;
@@ -1673,18 +1809,17 @@ find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
       }
 
       for (extent = 0; extent < statbuf->num_extents; extent++) {
-        if (statbuf->extent_lsn[extent] == lsn) {
-          const unsigned int len2 = sizeof(iso9660_stat_t) + strlen(statbuf->filename) + 1;
-          iso9660_stat_t *ret_stat = calloc(1, len2);
-          if (!ret_stat) {
+        if (statbuf->extents[extent].lsn == lsn) {
+	  iso9660_statv2_t *ret_stat;
+
+	  ret_stat = iso9660_statv2_clone(statbuf);
+	  if (NULL == ret_stat) {
             iso9660_dirlist_free(dirlist);
-            cdio_warn("Couldn't calloc(1, %d)", len2);
             free(*ppsz_full_filename);
             *ppsz_full_filename = NULL;
             return NULL;
           }
-          memcpy(ret_stat, statbuf, len2);
-          iso9660_filelist_free (entlist);
+          iso9660_filelist_free_v2 (entlist);
           iso9660_dirlist_free(dirlist);
           return ret_stat;
         }
@@ -1692,14 +1827,14 @@ find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
 
     }
 
-  iso9660_filelist_free (entlist);
+  iso9660_filelist_free_v2 (entlist);
 
   /* now recurse/descend over directories encountered */
 
   _CDIO_LIST_FOREACH (entnode, dirlist)
     {
       char *psz_path_prefix = _cdio_list_node_data (entnode);
-      iso9660_stat_t *ret_stat;
+      iso9660_statv2_t *ret_stat;
       free(*ppsz_full_filename);
       *ppsz_full_filename = NULL;
       ret_stat = find_lsn_recurse (p_image, iso9660_readdir,
@@ -1726,12 +1861,13 @@ find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
 
    Returns stat_t of entry if we found lsn, or NULL otherwise.
  */
-iso9660_stat_t *
-iso9660_fs_find_lsn(CdIo_t *p_cdio, lsn_t i_lsn)
+iso9660_statv2_t *
+iso9660_fs_find_lsn_v2(CdIo_t *p_cdio, lsn_t i_lsn)
 {
   char *psz_full_filename = NULL;
-  iso9660_stat_t * p_statbuf;
-  p_statbuf = find_lsn_recurse (p_cdio, (iso9660_readdir_t *) iso9660_fs_readdir,
+  iso9660_statv2_t * p_statbuf;
+  p_statbuf = find_lsn_recurse (p_cdio,
+				(iso9660_readdir_t *) iso9660_fs_readdir_v2,
 				"/", i_lsn, &psz_full_filename);
   if (psz_full_filename != NULL)
     free(psz_full_filename);
@@ -1750,13 +1886,13 @@ iso9660_fs_find_lsn(CdIo_t *p_cdio, lsn_t i_lsn)
    freeing the result.
 
    @return stat_t of entry if we found lsn, or NULL otherwise.
-   Caller must free return value using iso9660_stat_free().
+   Caller must free return value using iso9660_statv2_free().
  */
-iso9660_stat_t *
-iso9660_fs_find_lsn_with_path(CdIo_t *p_cdio, lsn_t i_lsn,
-			      /*out*/ char **ppsz_full_filename)
+iso9660_statv2_t *
+iso9660_fs_find_lsn_with_path_v2(CdIo_t *p_cdio, lsn_t i_lsn,
+			         /*out*/ char **ppsz_full_filename)
 {
-  return find_lsn_recurse (p_cdio, (iso9660_readdir_t *) iso9660_fs_readdir,
+  return find_lsn_recurse (p_cdio, (iso9660_readdir_t *) iso9660_fs_readdir_v2,
 			   "/", i_lsn, ppsz_full_filename);
 }
 
@@ -1769,14 +1905,14 @@ iso9660_fs_find_lsn_with_path(CdIo_t *p_cdio, lsn_t i_lsn,
    @param i_lsn the LSN to find
 
    @return stat_t of entry if we found lsn, or NULL otherwise.
-   Caller must free return value using iso9660_stat_free().
+   Caller must free return value using iso9660_statv2_free().
  */
-iso9660_stat_t *
-iso9660_ifs_find_lsn(iso9660_t *p_iso, lsn_t i_lsn)
+iso9660_statv2_t *
+iso9660_ifs_find_lsn_v2(iso9660_t *p_iso, lsn_t i_lsn)
 {
   char *psz_full_filename = NULL;
-  iso9660_stat_t *ret  =
-    find_lsn_recurse (p_iso, (iso9660_readdir_t *) iso9660_ifs_readdir,
+  iso9660_statv2_t *ret  =
+    find_lsn_recurse (p_iso, (iso9660_readdir_t *) iso9660_ifs_readdir_v2,
 		      "/", i_lsn, &psz_full_filename);
   if (psz_full_filename != NULL)
     free(psz_full_filename);
@@ -1797,45 +1933,53 @@ iso9660_ifs_find_lsn(iso9660_t *p_iso, lsn_t i_lsn)
    *ppsz_path when you are done using it.
 
    @return stat_t of entry if we found lsn, or NULL otherwise.
-   Caller must free return value using iso9660_stat_free().
+   Caller must free return value using iso9660_statv2_free().
  */
-iso9660_stat_t *
-iso9660_ifs_find_lsn_with_path(iso9660_t *p_iso, lsn_t i_lsn,
-			       /*out*/ char **ppsz_full_filename)
+iso9660_statv2_t *
+iso9660_ifs_find_lsn_with_path_v2(iso9660_t *p_iso, lsn_t i_lsn,
+			          /*out*/ char **ppsz_full_filename)
 {
-  return find_lsn_recurse (p_iso, (iso9660_readdir_t *) iso9660_ifs_readdir,
+  return find_lsn_recurse (p_iso, (iso9660_readdir_t *) iso9660_ifs_readdir_v2,
 			   "/", i_lsn, ppsz_full_filename);
 }
 
 /*!
-  Free the passed iso9660_stat_t structure.
+  Free the passed iso9660_statv2_t structure.
 
   @param p_stat iso9660 stat buffer to free.
 
  */
 void
-iso9660_stat_free(iso9660_stat_t *p_stat)
+iso9660_statv2_free(iso9660_statv2_t *p_stat)
 {
   if (p_stat != NULL) {
-    if (p_stat->rr.psz_symlink) {
-      CDIO_FREE_IF_NOT_NULL(p_stat->rr.psz_symlink);
-    }
-    CDIO_FREE_IF_NOT_NULL(p_stat->extent_lsn);
-    CDIO_FREE_IF_NOT_NULL(p_stat->extent_size);
+    cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_free"));
+
+    iso9660_rock_statbuf_free_entrails(&(p_stat->rr));
+    CDIO_FREE_IF_NOT_NULL(p_stat->extents);
+    CDIO_FREE_IF_NOT_NULL(p_stat->filename);
     free(p_stat);
   }
 }
 
 /*!
-  Free the passed CdioISOC9660FileList_t structure.
+  Free the passed CdioISO9660FileListV2_t structure.
 */
 void
-iso9660_filelist_free(CdioISO9660FileList_t *p_filelist) {
-  _cdio_list_free(p_filelist, true, (CdioDataFree_t) iso9660_stat_free);
+iso9660_filelist_free_v2(CdioISO9660FileListV2_t *p_filelist) {
+  CdioListNode_t *node;
+  iso9660_statv2_t *p_stat;
+
+  node = _cdio_list_begin(p_filelist);
+  if (NULL != node) {
+    p_stat = (iso9660_statv2_t *) _cdio_list_node_data (node);
+    cdio_assert(_iso9660_demand_statv2(p_stat, "iso9660_filelist_free_v2"));
+  }
+  _cdio_list_free(p_filelist, true, (CdioDataFree_t) iso9660_statv2_free);
 }
 
 /*!
-  Free the passed CdioISOC9660DirList_t structure.
+  Free the passed CdioISO9660DirList_t structure.
 */
 void
 iso9660_dirlist_free(CdioISO9660DirList_t *p_filelist) {
@@ -1854,7 +1998,7 @@ iso9660_ifs_is_xa (const iso9660_t * p_iso)
 }
 
 static bool_3way_t
-iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
+iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_statv2_t *_root,
 		      char **splitpath, uint64_t *pu_file_limit)
 {
   unsigned offset = 0;
@@ -1870,7 +2014,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 
   cdio_assert (_root->type == _STAT_DIR);
 
-   blocks = CDIO_EXTENT_BLOCKS(_root->extent_size[0]);
+  blocks = CDIO_EXTENT_BLOCKS(_root->extents[0].size);
   _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
   if (!_dirbuf)
     {
@@ -1878,7 +2022,8 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
     return dunno;
     }
 
-  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->extent_lsn[0], blocks);
+  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->extents[0].lsn,
+                               blocks);
   if (ret != blocks * ISO_BLOCKSIZE) {
     free(_dirbuf);
     return false;
@@ -1887,7 +2032,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
   while (offset < (blocks * ISO_BLOCKSIZE))
     {
       iso9660_dir_t *p_iso9660_dir = (void *) &_dirbuf[offset];
-      iso9660_stat_t *p_stat;
+      iso9660_statv2_t *p_stat;
       unsigned int i_last_component = 1;
 
       if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
@@ -1903,7 +2048,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
           have_rr = iso_have_rr_traverse (p_iso, p_stat, &splitpath[i_last_component],
 					  pu_file_limit);
       }
-      free(p_stat);
+      iso9660_statv2_free(p_stat);
       if (have_rr != nope) {
         free (_dirbuf);
         return have_rr;
@@ -1941,7 +2086,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 extern bool_3way_t
 iso9660_have_rr(iso9660_t *p_iso, uint64_t u_file_limit)
 {
-  iso9660_stat_t *p_root;
+  iso9660_statv2_t *p_root;
   char *p_psz_splitpath[2] = {strdup("/"), strdup("")};
   bool_3way_t is_rr = nope;
 
@@ -1953,9 +2098,316 @@ iso9660_have_rr(iso9660_t *p_iso, uint64_t u_file_limit)
   if (u_file_limit == 0) u_file_limit = UINT64_MAX;
 
   is_rr = iso_have_rr_traverse (p_iso, p_root, p_psz_splitpath, &u_file_limit);
-  free(p_root);
+  iso9660_statv2_free(p_root);
   free(p_psz_splitpath[0]);
   free(p_psz_splitpath[1]);
 
   return is_rr;
 }
+
+
+/* ---------------- Access methods of iso9660_statv2_t  ------------------- */
+
+iso_rock_statbuf_t *
+iso9660_statv2_get_rr(iso9660_statv2_t *p_stat)
+{
+  cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_get_rr"));
+  return &(p_stat->rr);
+}
+
+struct tm *
+iso9660_statv2_get_tm(iso9660_statv2_t *p_stat) {
+  cdio_assert (_iso9660_demand_statv2(p_stat , "iso9660_statv2_get_tm"));
+  return &(p_stat->tm);
+}
+
+uint64_t
+iso9660_statv2_get_total_size(iso9660_statv2_t *p_stat)
+{
+  cdio_assert (_iso9660_demand_statv2(p_stat,
+				      "iso9660_statv2_get_total_size"));
+  return p_stat->total_size;
+}
+
+uint32_t
+iso9660_statv2_get_extents(iso9660_statv2_t *p_stat,
+                           iso9660_extent_descr_t **extents)
+{
+  cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_get_extents"));
+  *extents = p_stat->extents;
+  return p_stat->num_extents;
+}
+
+bool
+iso9660_statv2_get_xa(iso9660_statv2_t *p_stat, iso9660_xa_t **p_xa)
+{
+  cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_get_xa"));
+  *p_xa = &p_stat->xa;
+  return p_stat->b_xa;
+}
+
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
+enum iso9660_file_type_e
+#else
+int
+#endif
+iso9660_statv2_get_type(iso9660_statv2_t *p_stat)
+{
+  cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_get_type"));
+  return p_stat->type;
+}
+
+char *
+iso9660_statv2_get_filename(iso9660_statv2_t *p_stat)
+{
+  cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_get_filename"));
+  return p_stat->filename;
+}
+
+
+/* --------------------------- Deprecated old API ------------------------- */
+
+
+static bool
+_iso9660_demand_stat(iso9660_stat_t *p_stat, const char *func_name)
+{
+  if (NULL == p_stat)
+    return false;
+
+#ifndef ISO9660_STAT_NO_RUNTIME_CHECK
+
+  /* Look for first byte of magic number of iso9660_statv2_t */
+  if (0xFF == ((uint8_t *) p_stat)[0]) {
+   cdio_warn("Probable programming error with using %s : Detected non-iso9660_stat_t", func_name);
+    return false;
+  }
+
+#endif
+
+  return true;
+}
+
+
+/*! Convert an iso9660_statv2_t to a legacy iso9660_stat_t. */
+static iso9660_stat_t *
+_iso9660_statv2_to_stat(iso9660_statv2_t *p_v2)
+{
+  iso9660_stat_t *p_stat = NULL;
+  int stat_len;
+
+  stat_len = (int) sizeof(iso9660_stat_t) + strlen(p_v2->filename) + 1;
+  p_stat = calloc(1, stat_len);
+  if (NULL == p_stat) {
+no_memory:;
+    cdio_warn("Could not allocate memory for conversion to iso9660_stat_t");
+    return NULL;
+  }
+
+  memcpy(&(p_stat->rr), &(p_v2->rr), sizeof(iso_rock_statbuf_t));
+  /* If there is a link name owned by rr, then it must be cloned */
+  if (!iso9660_rock_statbuf_clone_entrails(&(p_stat->rr), &(p_v2->rr))) {
+    free(p_stat);
+    goto no_memory;
+  }
+  memcpy(&(p_stat->tm), &(p_v2->tm), sizeof(struct tm));
+  p_stat->lsn = p_v2->extents[0].lsn;
+  p_stat->size = p_v2->extents[0].size;
+  p_stat->secsize = CDIO_EXTENT_BLOCKS(p_stat->size);
+  memcpy(&(p_stat->xa), &(p_v2->xa), sizeof(iso9660_xa_t));
+
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
+  p_stat->type = p_v2->type;
+#else
+  if (2 == p_v2->type)
+    p_stat->type = _STAT_DIR;
+  else
+    p_stat->type = _STAT_FILE;
+#endif
+
+  p_stat->b_xa = p_v2->b_xa;
+  strcpy(p_stat->filename, p_v2->filename);
+
+  return p_stat;
+}
+
+/* ! Convert a CdioISO9660FileListV2_t to a legacy CdioISO9660FileList_t */
+static CdioISO9660FileList_t *
+_iso9660_flistv2_to_flist(CdioISO9660FileListV2_t *l_v2)
+{
+  CdioISO9660FileList_t *l_v1 = NULL;
+  CdioListNode_t *entnode;
+  iso9660_stat_t *p_v1;
+  iso9660_statv2_t *p_v2;
+
+  l_v1 = (CdioISO9660FileListV2_t *) _cdio_list_new ();
+  if (NULL == l_v1) {
+no_memory:
+    cdio_warn(
+        "Could not allocate memory for conversion to CdioISO9660FileListV2_t");
+    return NULL;
+  }
+
+  _CDIO_LIST_FOREACH (entnode, l_v2)
+    {
+      p_v2 = _cdio_list_node_data (entnode);
+      p_v1 = _iso9660_statv2_to_stat(p_v2);
+      if (NULL == p_v1) {
+        iso9660_filelist_free(l_v1);
+        goto no_memory;
+      }
+      _cdio_list_append (l_v1, p_v1);
+    }
+
+  return l_v1;
+}
+
+
+void
+iso9660_stat_free(iso9660_stat_t *p_stat)
+{
+  if (p_stat != NULL) {
+    cdio_assert (_iso9660_demand_stat(p_stat, "iso9660_stat_free"));
+    if (p_stat->rr.psz_symlink) {
+      CDIO_FREE_IF_NOT_NULL(p_stat->rr.psz_symlink);
+    }
+    free(p_stat);
+  }
+}
+
+
+#define ISO9660_STAT_CONV_DECL \
+  iso9660_stat_t *p_v1; \
+  iso9660_statv2_t *p_v2;
+
+#define ISO9660_STAT_CONV_AND_RET \
+  if (NULL == p_v2) \
+    return NULL; \
+  p_v1 = _iso9660_statv2_to_stat(p_v2); \
+  iso9660_statv2_free(p_v2); \
+  return p_v1;
+
+
+iso9660_stat_t *
+iso9660_fs_stat (CdIo_t *p_cdio, const char psz_path[])
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_fs_statv2 (p_cdio, psz_path);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_fs_stat_translate (CdIo_t *p_cdio, const char psz_path[])
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_fs_statv2_translate(p_cdio, psz_path);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_ifs_stat (iso9660_t *p_iso, const char psz_path[])
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_ifs_statv2(p_iso, psz_path);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_ifs_stat_translate (iso9660_t *p_iso, const char psz_path[])
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_ifs_statv2_translate(p_iso, psz_path);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_fs_find_lsn_with_path(CdIo_t *p_cdio, lsn_t i_lsn,
+                              /*out*/ char **ppsz_full_filename)
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_fs_find_lsn_with_path_v2(p_cdio, i_lsn, ppsz_full_filename);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_ifs_find_lsn_with_path(iso9660_t *p_iso,
+                              lsn_t i_lsn, /*out*/ char **ppsz_path)
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_ifs_find_lsn_with_path_v2(p_iso, i_lsn, ppsz_path);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_fs_find_lsn(CdIo_t *p_cdio, lsn_t i_lsn)
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_fs_find_lsn_v2(p_cdio, i_lsn);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+iso9660_stat_t *
+iso9660_ifs_find_lsn(iso9660_t *p_iso, lsn_t i_lsn)
+{
+  ISO9660_STAT_CONV_DECL
+  p_v2 = iso9660_ifs_find_lsn_v2(p_iso, i_lsn);
+  ISO9660_STAT_CONV_AND_RET
+}
+
+#define ISO9660_FLIST_CONV_DECL \
+  CdioISO9660FileList_t *l_v1; \
+  CdioISO9660FileListV2_t *l_v2;
+
+#define ISO9660_FLIST_CONV_AND_RET \
+  if (NULL == l_v2) \
+    return NULL; \
+  l_v1 = _iso9660_flistv2_to_flist(l_v2); \
+  iso9660_filelist_free_v2(l_v2); \
+  return l_v1;
+
+
+CdioList_t *
+iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
+{
+  ISO9660_FLIST_CONV_DECL
+  l_v2 = (CdioISO9660FileListV2_t *) iso9660_fs_readdir_v2(p_cdio, psz_path);
+  ISO9660_FLIST_CONV_AND_RET
+}
+
+CdioList_t *
+iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
+{
+  ISO9660_FLIST_CONV_DECL
+  l_v2 = (CdioISO9660FileListV2_t *) iso9660_ifs_readdir_v2(p_iso, psz_path);
+  ISO9660_FLIST_CONV_AND_RET
+}
+
+CdioISO9660FileList_t *
+iso9660_filelist_new(void) {
+  return (CdioISO9660FileList_t *) _cdio_list_new ();
+}
+
+void
+iso9660_filelist_free(CdioISO9660FileList_t *p_filelist) {
+  CdioListNode_t *node;
+  iso9660_stat_t *p_stat;
+
+  node = _cdio_list_begin(p_filelist);
+  if (NULL != node) {
+    p_stat = (iso9660_stat_t *) _cdio_list_node_data (node);
+    cdio_assert(_iso9660_demand_stat(p_stat, "iso9660_filelist_free"));
+  }
+  _cdio_list_free(p_filelist, true, (CdioDataFree_t) iso9660_stat_free);
+}
+
+
+/* ------------------------ End of deprecated old API ---------------------- */
+
+
+/* Transition convenience function */
+iso9660_stat_t *
+iso9660_statv2_get_v1(iso9660_statv2_t *p_stat)
+{
+  return _iso9660_statv2_to_stat(p_stat);
+}
+
+

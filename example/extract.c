@@ -18,6 +18,14 @@
 
 /* Extract the full contents of either an UDF or ISO9660 image file.
    TODO: timestamp preservation, file permissions, Unicode
+
+   With ISO9660 this program demonstrates both statbuf APIs:
+   Legacy iso9660_stat_t with its limitation to data file size < 4 GiB,
+   and the more capable iso9660_statv2_t.
+   Define Macro LIBISO9660_USE_LEGACY_STAT to switch between them.
+
+   TODO : Rock Ridge file types other than directory or data file.
+          Option to prefer Rock Ridge over Joliet.
  */
 
 /* To handle files > 2 GB, we may need the Large File Support settings
@@ -81,6 +89,9 @@ static void log_handler (cdio_log_level_t level, const char *message)
   case CDIO_LOG_DEBUG:
   case CDIO_LOG_INFO:
     return;
+  case CDIO_LOG_ASSERT:
+    printf("cdio ASSERT message: %s\n", message);
+    exit(1);
   default:
     printf("cdio %d message: %s\n", level, message);
   }
@@ -172,11 +183,26 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
   const char *psz_iso_name = &psz_fullpath[strlen(psz_extract_dir)];
   unsigned char buf[ISO_BLOCKSIZE];
   CdioListNode_t *p_entnode;
+  lsn_t lsn;
+  size_t i;
+
+#ifdef LIBISO9660_USE_LEGACY_STAT
+
+  int64_t i_file_length;
   iso9660_stat_t *p_statbuf;
   CdioISO9660FileList_t* p_entlist;
-  size_t i, j;
-  lsn_t lsn;
+
+#else
+
+  size_t j;
   int64_t i_extent_length;
+  iso9660_stat_t *p_statbuf = NULL;
+  iso9660_statv2_t *p_statv2;
+  CdioISO9660FileListV2_t* p_entlist;
+  uint32_t num_extents;
+  iso9660_extent_descr_t *extents;
+
+#endif /* ! LIBISO9660_USE_LEGACY_STAT */
 
   if ((p_iso == NULL) || (psz_path == NULL))
     return 1;
@@ -186,14 +212,34 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
     return 1;
   psz_basename = &psz_fullpath[i_length];
 
+#ifdef LIBISO9660_USE_LEGACY_STAT
   p_entlist = iso9660_ifs_readdir(p_iso, psz_path);
+#else
+  p_entlist = iso9660_ifs_readdir_v2(p_iso, psz_path);
+#endif
+
   if (!p_entlist) {
     printf("Could not access %s\n", psz_path);
     return 1;
   }
 
   _CDIO_LIST_FOREACH (p_entnode, p_entlist) {
+
+#ifdef LIBISO9660_USE_LEGACY_STAT
+
     p_statbuf = (iso9660_stat_t*) _cdio_list_node_data(p_entnode);
+
+#else
+
+    p_statv2 = (iso9660_statv2_t *) _cdio_list_node_data(p_entnode);
+    if (NULL != p_statbuf)
+      iso9660_stat_free(p_statbuf); /* dispose legacy statbuf before refill */
+    p_statbuf = iso9660_statv2_get_v1(p_statv2);
+    if (NULL == p_statbuf)
+      goto out;
+
+#endif /* ! LIBISO9660_USE_LEGACY_STAT */
+
     /* Eliminate . and .. entries */
     if ( (strcmp(p_statbuf->filename, ".") == 0)
       || (strcmp(p_statbuf->filename, "..") == 0) )
@@ -210,11 +256,34 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
         fprintf(stderr, "  Unable to create file\n");
         goto out;
       }
-      for (j = 0; j < p_statbuf->num_extents; j++) {
-        i_extent_length = p_statbuf->extent_size[j];
+
+#ifdef LIBISO9660_USE_LEGACY_STAT
+
+      i_file_length = p_statbuf->size;
+      for (i = 0; i_file_length > 0; i++) {
+        memset(buf, 0, ISO_BLOCKSIZE);
+        lsn = p_statbuf->lsn + i;
+        if (iso9660_iso_seek_read(p_iso, buf, lsn, 1) != ISO_BLOCKSIZE) {
+          fprintf(stderr, " Error reading ISO9660 file %s at LSN %lu\n",
+             psz_iso_name, (long unsigned int)lsn);
+          goto out;
+        }
+        fwrite(buf, (size_t)MIN(i_file_length, ISO_BLOCKSIZE), 1, fd);
+        if (ferror(fd)) {
+          fprintf(stderr, " Error writing file %s: %s\n", psz_iso_name,
+          strerror(errno));
+          goto out;
+        }
+        i_file_length -= ISO_BLOCKSIZE;
+      }
+#else
+
+      num_extents = iso9660_statv2_get_extents(p_statv2, &extents);
+      for (j = 0; j < num_extents; j++) {
+        i_extent_length = extents[j].size;
         for (i = 0; i_extent_length > 0; i++) {
           memset(buf, 0, ISO_BLOCKSIZE);
-          lsn = p_statbuf->extent_lsn[j] + i;
+          lsn = extents[j].lsn + i;
           if (iso9660_iso_seek_read(p_iso, buf, lsn, 1) != ISO_BLOCKSIZE) {
             fprintf(stderr, "  Error reading ISO9660 file %s at LSN %lu\n",
               psz_iso_name, (long unsigned int)lsn);
@@ -229,6 +298,9 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
           i_extent_length -= ISO_BLOCKSIZE;
         }
       }
+
+#endif /* ! LIBISO9660_USE_LEGACY_STAT */
+
       fclose(fd);
       fd = NULL;
     }
@@ -238,7 +310,15 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 out:
   if (fd != NULL)
     fclose(fd);
+
+#ifdef LIBISO9660_USE_LEGACY_STAT
   iso9660_filelist_free(p_entlist);
+#else
+  iso9660_filelist_free_v2(p_entlist);
+  if (NULL != p_statbuf)
+    iso9660_stat_free(p_statbuf);
+#endif
+
   return r;
 }
 

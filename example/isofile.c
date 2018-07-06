@@ -58,22 +58,25 @@
 
 #define my_exit(rc)				\
   fclose (p_outfd);				\
-  free(p_statbuf);				\
+  iso9660_statv2_free(p_statbuf);		\
   iso9660_close(p_iso);				\
   return rc;					\
 
 int
 main(int argc, const char *argv[])
 {
-  iso9660_stat_t *p_statbuf;
+  iso9660_statv2_t *p_statbuf;
   FILE *p_outfd;
   int i, j;
   char const *psz_image;
   char const *psz_fname;
+  char const *psz_target;
   iso9660_t *p_iso;
+  uint32_t num_extents;
+  iso9660_extent_descr_t *extents;
 
-  if (argc > 3) {
-    printf("usage %s [ISO9660-image.ISO [filename]]\n", argv[0]);
+  if (argc > 4) {
+    printf("usage %s [ISO9660-image.ISO [ISO-filename [Local-filename]]]\n", argv[0]);
     printf("Extracts filename from ISO-9660-image.ISO\n");
     return 1;
   }
@@ -88,6 +91,11 @@ main(int argc, const char *argv[])
   else 
     psz_fname = LOCAL_FILENAME;
 
+  if (argc > 3) 
+    psz_target = argv[3];
+  else 
+    psz_target = psz_fname;
+
   p_iso = iso9660_open (psz_image);
   
   if (NULL == p_iso) {
@@ -95,7 +103,7 @@ main(int argc, const char *argv[])
     return 1;
   }
 
-  p_statbuf = iso9660_ifs_stat_translate (p_iso, psz_fname);
+  p_statbuf = iso9660_ifs_statv2_translate (p_iso, psz_fname);
 
   if (NULL == p_statbuf) 
     {
@@ -106,20 +114,23 @@ main(int argc, const char *argv[])
       return 2;
     }
 
-  if (!(p_outfd = fopen (psz_fname, "wb")))
+  if (!(p_outfd = fopen (psz_target, "wb")))
     {
       perror ("fopen()");
-      free(p_statbuf);
+      iso9660_statv2_free(p_statbuf);
       iso9660_close(p_iso);
       return 3;
     }
 
   /* Copy the blocks from the ISO-9660 filesystem to the local filesystem. */
-  for (j = 0; j < p_statbuf->num_extents; j++) {
-    const unsigned int i_blocks = CEILING(p_statbuf->extent_size[j], ISO_BLOCKSIZE);
+
+  num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
+
+  for (j = 0; j < num_extents; j++) {
+    const unsigned int i_blocks = CEILING(extents[j].size, ISO_BLOCKSIZE);
     for (i = 0; i < i_blocks ; i++) {
       char buf[ISO_BLOCKSIZE];
-      const lsn_t lsn = p_statbuf->extent_lsn[j] + i;
+      const lsn_t lsn = extents[j].lsn + i;
 
       memset (buf, 0, ISO_BLOCKSIZE);
 
@@ -137,13 +148,13 @@ main(int argc, const char *argv[])
       }
     }
   }
-  
+
   fflush (p_outfd);
 
   /* Make sure the file size has the exact same byte size. Without the
      truncate below, the file will a multiple of ISO_BLOCKSIZE.
    */
-  if (ftruncate (fileno (p_outfd), p_statbuf->size))
+  if (ftruncate (fileno (p_outfd), iso9660_statv2_get_total_size(p_statbuf)))
     perror ("ftruncate()");
 
   printf("Extraction of file '%s' from %s successful.\n", 

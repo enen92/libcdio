@@ -315,10 +315,25 @@ typedef struct iso_rock_statbuf_s {
 PRAGMA_END_PACKED
 
 /*! return length of name field; 0: not found, -1: to be ignored */
+int get_rock_ridge_filename_rr(iso9660_dir_t * p_iso9660_dir,
+			       /*out*/ char * psz_name,
+			       /*in/out*/ iso_rock_statbuf_t *p_rr);
+
+/*! Variation of above with deprecated legacy iso9660_stat_t rather
+    than iso_rock_statbuf_t.
+ */
 int get_rock_ridge_filename(iso9660_dir_t * de, /*out*/ char * retname, 
                             /*out*/ iso9660_stat_t *p_stat);
 
+/*! There is no get_rock_ridge_filename_v2(). Use instead:
+      get_rock_ridge_filename_rr(de, retname, iso9660_statv2_get_rr(p_stat));
+ */
+
+
   int parse_rock_ridge_stat(iso9660_dir_t *de, /*out*/ iso9660_stat_t *p_stat);
+
+  int parse_rock_ridge_stat_rr(iso9660_dir_t *p_iso9660_dir,
+                               /*out*/ iso_rock_statbuf_t *p_rr);
 
   /*!
     Returns POSIX mode bitstring for a given file.

@@ -65,12 +65,14 @@
 int
 main(int argc, const char *argv[])
 {
-  CdioISO9660FileList_t *p_entlist;
+  CdioISO9660FileListV2_t *p_entlist;
   CdioListNode_t *p_entnode;
   char const *psz_fname;
   iso9660_t *p_iso;
   const char *psz_path = "/";
   char psz_extents[] = " [4294967296 extents]"; /* enough room for uint32_t */
+  uint32_t num_extents;
+  iso9660_extent_descr_t *extents;
 
   if (argc > 1)
     psz_fname = argv[1];
@@ -96,7 +98,7 @@ main(int argc, const char *argv[])
     print_vd_info("Volume Set ", iso9660_ifs_get_volumeset_id);
   }
 
-  p_entlist = iso9660_ifs_readdir (p_iso, psz_path);
+  p_entlist = iso9660_ifs_readdir_v2 (p_iso, psz_path);
 
   /* Iterate over the list of nodes that iso9660_ifs_readdir gives  */
 
@@ -104,20 +106,22 @@ main(int argc, const char *argv[])
     _CDIO_LIST_FOREACH (p_entnode, p_entlist)
     {
       char filename[4096];
-      iso9660_stat_t *p_statbuf =
-	(iso9660_stat_t *) _cdio_list_node_data (p_entnode);
-      iso9660_name_translate(p_statbuf->filename, filename);
+      iso9660_statv2_t *p_statbuf =
+			(iso9660_statv2_t *) _cdio_list_node_data (p_entnode);
 
-	if (p_statbuf->num_extents > 1)
-	    sprintf(psz_extents, " [%lu extents]",
-		    (unsigned long) p_statbuf->num_extents);
-	printf ("%s [LSN %8d] %12" PRIi64 " %s%s%s\n",
-		_STAT_DIR == p_statbuf->type ? "d" : "-",
-		p_statbuf->extent_lsn[0], p_statbuf->total_size, psz_path, filename,
-		p_statbuf->num_extents < 2 ? "" : psz_extents);
+      iso9660_name_translate(iso9660_statv2_get_filename(p_statbuf), filename);
+
+      num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
+      if (num_extents > 1)
+	sprintf(psz_extents, " [%lu extents]", (unsigned long) num_extents);
+      printf ("%s [LSN %8d] %12" PRIi64 " %s%s%s\n",
+		_STAT_DIR == iso9660_statv2_get_type(p_statbuf) ? "d" : "-",
+		extents[0].lsn, iso9660_statv2_get_total_size(p_statbuf),
+		psz_path, filename,
+		num_extents < 2 ? "" : psz_extents);
     }
 
-    iso9660_filelist_free(p_entlist);
+    iso9660_filelist_free_v2(p_entlist);
   }
 
   iso9660_close(p_iso);

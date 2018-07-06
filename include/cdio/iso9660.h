@@ -508,19 +508,65 @@ typedef struct iso9660_svd_s  iso9660_svd_t;
 
 PRAGMA_END_PACKED
 
-/*! \brief A data type for a list of ISO9660
-  statbuf file pointers returned from the various
-  Cdio iso9660 readdir routines.
- */
-typedef CdioList_t CdioISO9660FileList_t;
 
-/*! \brief A data type for a list of ISO9660
-  statbuf drectory pointer returned from the variious
-  Cdio iso9660 readdir routines.
+/*! \brief A data type for a list of pointers to objects which which each
+  can be completely disposed by a single system call free(3).
  */
 typedef CdioList_t CdioISO9660DirList_t;
 
-/*! \brief Unix stat-like version of iso9660_dir
+
+/*! The handle type of the new multi-extent capable iso9660_statv2 API.
+    Its entrails are private. Use the access methods below under the
+    headline "Access methods of iso9660_statv2_t".
+*/
+struct iso9660_statv2_s;
+typedef struct iso9660_statv2_s   iso9660_statv2_t;
+
+/*! A data type for a list of ISO9660 statbuf file pointers returned
+    from various iso9660_statv2_t producing functions.
+ */
+typedef CdioList_t CdioISO9660FileListV2_t;
+
+
+/* >>> This needs to be decided before release ! <<<
+
+  Legacy iso9660_stat_s has an anonymous enum for the file type.
+  It is not possible to use the same enum names in another enum in successor
+  iso9660_statv2_s.
+  Alternative solutions are:
+
+  - Define and use a named enum and thus change the souce code of the API
+    definition.
+    To my understanding the change is compatible. But that is a bet on
+    the plausibility of compiler behavior. At least i cannot give hard
+    reasons why this must stay API and ABI compatible under all circumstances.
+    Define ISO9660_WITH_FILE_TYPE_ENUM to activate this alternative.
+
+  - Simulate in iso9660_statv2_s the anonymous enum by some integer-ish type
+    which bears the same values as publicly defined by the anonymous enum.
+    This is a dirty hack, but leaves the legacy API literally unchanged.
+    Do NOT define ISO9660_WITH_FILE_TYPE_ENUM to activate this alternative.
+
+    This is currently enabled.
+
+    Thomas Schmitt scdbackup@gmx.net
+*/
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
+/*! ISO 9660 file type (not Rock Ridge file type)
+   _STAT_FILE = data file (all Rock Ridge file types except directory)
+   _STAT_DIR  = directory (in Rock Ridge too)
+*/
+enum iso9660_file_type_e {
+  _STAT_FILE = 1,
+  _STAT_DIR = 2
+};
+#endif
+
+
+/*! \brief Deprecated Unix stat-like version of iso9660_dir
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_statv2_t and its methods instead.
 
    The iso9660_stat structure is not part of the ISO-9660
    specification. We use it for our to communicate information
@@ -535,29 +581,27 @@ struct iso9660_stat_s { /* big endian!! */
 
   struct tm          tm;              /**< time on entry - FIXME merge with
                                          one of entries above, like ctime? */
-#ifndef DO_NOT_WANT_COMPATIBILITY
-  /* Legacy API (Deprecated) */
   lsn_t              lsn;             /**< start logical sector number */
   uint32_t           size;            /**< size of the first extent, in bytes */
   uint32_t           secsize;         /**< size of the first extent, in sectors */
-#endif /* DO_NOT_WANT_COMPATIBILITY */
-
-  /* Multi-Extent API */
-  uint32_t           num_extents;     /**< number of extents */
-                     /**v combined size of all extents, in bytes */
-  uint64_t           total_size;
-                     /**v start logical sector number for each extent */
-  lsn_t              *extent_lsn;
-                     /**v size of each extent */
-  uint32_t           *extent_size;
-  /* NB: If you need to access the 'secsize' equivalent for an extent,
-   * you should use CDIO_EXTENT_BLOCKS(extent_size[extent_nr]) */
 
   iso9660_xa_t       xa;              /**< XA attributes */
+
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
+  enum iso9660_file_type_e   type;
+#else
   enum { _STAT_FILE = 1, _STAT_DIR = 2 } type;
+#endif
+
   bool               b_xa;
   char               filename[EMPTY_ARRAY_SIZE];    /**< filename */
 };
+
+/*! \brief *** Deprecated *** data type for a list of deprecated iso9660_stat_t 
+  pointers returned from the various deprecated Cdio iso9660 readdir routines.
+ */
+typedef CdioList_t CdioISO9660FileList_t;
+
 
 /** A mask used in iso9660_ifs_read_vd which allows what kinds
     of extensions we allow, eg. Joliet, Rock Ridge, etc. */
@@ -871,6 +915,309 @@ typedef struct _iso9660_s iso9660_t;
   directory tree
 ======================================================================*/
 
+/*!
+
+  Return file status for psz_path. NULL is returned on error.
+
+  @param p_cdio the CD object to read from
+
+  @param psz_path filename path to look up and get information about
+
+  @return ISO 9660 file information. The caller must free the returned
+  result using iso9660_statv2_free().
+
+  Important note:
+
+  You make get different results looking up "/" versus "/." and the
+  latter may give more complete information. "/" will take information
+  from the PVD only, whereas "/." will force a directory read of "/" and
+  find "." and in that Rock-Ridge information might be found which fills
+  in more stat information. Ideally iso9660_fs_stat should be fixed.
+  Patches anyone?
+ */
+iso9660_statv2_t *iso9660_fs_statv2 (CdIo_t *p_cdio, const char psz_path[]);
+
+/*!
+  Return file status for path name psz_path. NULL is returned on error.
+  pathname version numbers in the ISO 9660 name are dropped, i.e. ;1
+  is removed and if level 1 ISO-9660 names are lowercased.
+
+  @param p_cdio the CD object to read from
+
+  @param psz_path filename path to look up and get information about
+
+  @return ISO 9660 file information.  The caller must free the
+  returned result using iso9660_statv2_free().
+
+ */
+iso9660_statv2_t *iso9660_fs_statv2_translate (CdIo_t *p_cdio,
+                                               const char psz_path[]);
+
+/*!
+  @param p_iso the ISO-9660 file image to get data from
+
+  @param psz_path path the look up
+
+  @return file status for pathname. NULL is returned on error.
+  The caller must free the returned result using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_ifs_statv2 (iso9660_t *p_iso, const char psz_path[]);
+
+/*!
+  @param p_iso the ISO-9660 file image to get data from
+
+  @param psz_path filename path translate
+
+  @return file status for path name psz_path. NULL is returned on
+  error.  pathname version numbers in the ISO 9660 name are dropped,
+  i.e. ;1 is removed and if level 1 ISO-9660 names are lowercased.
+  The caller must free the returned result using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_ifs_statv2_translate (iso9660_t *p_iso,
+                                                const char psz_path[]);
+
+/*!
+   Given a directory pointer, find the filesystem entry that contains
+   LSN and return information about it.
+
+   @param p_cdio the ISO-9660 file image to get data from.
+
+   @param i_lsn the LSN to find
+
+   @param ppsz_full_filename the place to store the name of the path that
+                             has LSN.
+                             On entry this should point to NULL. If not, the
+                             value will be freed.
+                             On exit a value is malloc'd and the caller is
+                             responsible for freeing the result.
+
+   @return stat_t of entry if we found lsn, or NULL otherwise.
+
+   Caller must free return value using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_fs_find_lsn_with_path_v2(CdIo_t *p_cdio, lsn_t i_lsn,
+                                           /*out*/ char **ppsz_full_filename);
+
+/*!
+   Given a directory pointer, find the filesystem entry that contains
+   lsn and return information about it.
+
+   @param p_cdio the CD object to read from
+
+   @return stat_t of entry if we found lsn, or NULL otherwise.
+   Caller must free return value using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_fs_find_lsn_v2(CdIo_t *p_cdio, lsn_t i_lsn);
+
+
+/*!
+   Given a directory pointer, find the filesystem entry that contains
+   lsn and return information about it.
+
+   @param p_iso pointer to iso_t
+
+   @param i_lsn LSN to find
+
+   @param ppsz_path  full path of lsn filename. On entry *ppsz_path should be
+   NULL. On return it will be allocated an point to the full path of the
+   file at lsn or NULL if the lsn is not found. You should deallocate
+   *ppsz_path when you are done using it.
+
+   @return stat_t of entry if we found lsn, or NULL otherwise.
+   Caller must free return value using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_ifs_find_lsn_with_path_v2(iso9660_t *p_iso,
+                                                    lsn_t i_lsn,
+                                                    /*out*/ char **ppsz_path);
+
+/*!
+   Given a directory pointer, find the filesystem entry that contains
+   lsn and return information about it.
+
+   @param p_iso the ISO-9660 file image to get data from.
+
+   @param i_lsn the LSN to find
+
+   @return stat_t of entry if we found lsn, or NULL otherwise.
+   Caller must free return value using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_ifs_find_lsn_v2(iso9660_t *p_iso, lsn_t i_lsn);
+
+
+/*!
+  Free the passed iso9660_statv2_t structure.
+
+  @param p_stat iso9660 stat buffer to free.
+
+ */
+void iso9660_statv2_free(iso9660_statv2_t *p_stat);
+
+
+/* ------------- Access methods of iso9660_statv2_t ------------- */
+
+/* Normally, the arguments to the following functions and to function
+   iso9660_statv2_free() get checked whether they look like an
+   iso9660_statv2_t object. If not, then the calls issue a log message
+   of level CDIO_LOG_ASSERT.
+   This check is disabled if the macro ISO9660_STATV2_NO_RUNTIME_CHECK was
+   defined when the library was compiled.
+ */
+
+/*!
+  Return a pointer to the iso_rock_statbuf_t object which describes the
+  Rock Ridge aspects of p_stat.
+
+  Do not dispose the iso_rock_statbuf_t object and do not use it after
+  p_stat was disposed.
+ */
+iso_rock_statbuf_t *iso9660_statv2_get_rr(iso9660_statv2_t *p_stat);
+
+/*!
+  Return a pointer to the struct tm which describes the ISO 9660 timestamp
+  of p_stat.
+
+  Do not dispose the struct tm and do not use it after p_stat was disposed.
+ */
+struct tm *iso9660_statv2_get_tm(iso9660_statv2_t *p_stat);
+
+/*!
+  Return the total number of stored bytes of p_stat.
+ */
+uint64_t iso9660_statv2_get_total_size(iso9660_statv2_t *p_stat);
+
+/*!
+  The structure of which an array is returned by iso9660_statv2_get_extents().
+  Each array member describes an "extent" or "file section", a byte interval
+  of a file. (They are 1:1 related to ISO 9660 directory records.)
+
+  ISO 9660 levels 1 and 2 restrict files to a single extent and thus to a
+  size of 4 GiB - 1 byte.
+  ISO level 3 specifies that in a data file several extents may exist.
+  Their bytes, if seamlessly concatenated, form the total byte string of the
+  data file. Better do not bet that no invalid bytes are stored between two
+  extents of the same file.
+  Directories are not allowed to have more than one extent.
+ */
+struct iso9660_extent_descr_s {
+  /* block address */
+  lsn_t    lsn;
+  /* byte count */
+  uint32_t size;
+};
+typedef struct iso9660_extent_descr_s  iso9660_extent_descr_t;
+
+/*!
+  Return the number of extents of p_stat and an array of start addresses and
+  of byte counts. Valid array indice are 0 to return value - 1.
+
+  @param extents  pointer to the location where the address of the extents
+                  array shall be stored.
+
+  Do not dispose the array and do not use it after p_stat was disposed.
+ */
+uint32_t iso9660_statv2_get_extents(iso9660_statv2_t *p_stat,
+                                    iso9660_extent_descr_t **extents);
+
+/*!
+  Return the XA attribute presence flag and, if present, a pointer to the
+  iso9660_xa_t object which describes the XA aspect of p_stat.
+
+  Do not dispose the iso9660_xa_t object and do not use it after p_stat was
+  disposed.
+ */
+bool iso9660_statv2_get_xa(iso9660_statv2_t *p_stat, iso9660_xa_t **p_xa);
+
+/*!
+  Return the file type of p_stat.
+ */
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
+enum iso9660_file_type_e iso9660_statv2_get_type(iso9660_statv2_t *p_stat);
+#else
+int iso9660_statv2_get_type(iso9660_statv2_t *p_stat);
+#endif
+
+/*!
+  Return a pointer to the filename aspect of p_stat.
+
+  Do not dispose the returned memory and do not use it after p_stat was
+  disposed.
+ */
+char *iso9660_statv2_get_filename(iso9660_statv2_t *p_stat);
+
+/* If you need to access the equivalent of iso9660_stat_t.secsize for an
+   extent of iso9660_statv2_t, use
+      CDIO_EXTENT_BLOCKS(extents[index].size)
+*/
+
+/*!
+  Derive a legacy iso9660_stat_t object from a iso9660_statv2_t object.
+
+  This is provided to ease the transition of applications to iso9660_statv2_t,
+  while keeping the members of the new data type accessible only by above
+  methods. The encapsulation shall preserve ABI compatibility if future
+  enhancements of iso9660_statv2_t happen.
+
+  Other than with above calls, the returned pointer refers to an independent
+  memory object which finally needs to be disposed.
+
+  After having obtained iso9660_statv2_t p_v2, one may do
+    p_stat = iso9660_statv2_get_v1(p_v2);
+    ... use p_stat as was done before, except for data file content ...
+  For data file content use the new info
+    total_size = iso9660_statv2_get_total_size(p_v2);
+    num_extents = iso9660_statv2_get_extents(p_v2, &extents);
+  Finally dispose both objects
+    iso9660_statv2_free(p_v2);
+    iso9660_stat_free(p_stat);
+ */
+iso9660_stat_t *iso9660_statv2_get_v1(iso9660_statv2_t *p_stat);
+
+/* ----------- End of access methods of iso9660_statv2_t ----------- */
+
+
+/*!
+  Read psz_path (a directory) and return a list of iso9660_statv2_t
+  pointers for the files inside that directory.
+
+  @param p_cdio the CD object to read from
+
+  @param psz_path path the read the directory from.
+
+  @return file status for psz_path.
+  The caller must free the returned result using iso9660_statv2_free() on each
+  list member or iso9660_filelist_free_v2() on the whole list.
+*/
+CdioList_t * iso9660_fs_readdir_v2 (CdIo_t *p_cdio, const char psz_path[]);
+
+/*!
+  Read psz_path (a directory) and return a list of iso9660_stat_t
+  pointers for the files inside that directory.
+
+  @param p_iso the ISO-9660 file image to get data from
+
+  @param psz_path path the read the directory from.
+
+  @return file status for psz_path.
+  The caller must free the returned result using iso9660_statv2_free() on each
+  list member or iso9660_filelist_free_v2() on the whole list.
+*/
+CdioList_t * iso9660_ifs_readdir_v2 (iso9660_t *p_iso, const char psz_path[]);
+
+/*!
+  Create a new data structure to hold a list of pointers to allocated
+  iso9660_statv2_t objects.
+
+  @return allocated list. Free with iso9660_filelist_free_v2()
+*/
+CdioISO9660FileListV2_t * iso9660_filelist_new_v2(void);
+
+/*!
+  Free the passed CdioISOC9660FileListV2_t structure and the iso9660_statv2_t
+  objects to which its list members point.
+*/
+void iso9660_filelist_free_v2(CdioISO9660FileListV2_t *p_filelist);
+
+
 void
 iso9660_dir_init_new (void *dir, uint32_t self, uint32_t ssize,
                       uint32_t parent, uint32_t psize,
@@ -893,6 +1240,10 @@ unsigned int
 iso9660_dir_calc_record_size (unsigned int namelen, unsigned int su_len);
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_fs_find_lsn_v2() instead.
+
    Given a directory pointer, find the filesystem entry that contains
    lsn and return information about it.
 
@@ -906,6 +1257,10 @@ iso9660_stat_t *iso9660_fs_find_lsn(CdIo_t *p_cdio, lsn_t i_lsn);
 
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_fs_find_lsn_with_path_v2() instead.
+
    Given a directory pointer, find the filesystem entry that contains
    LSN and return information about it.
 
@@ -925,6 +1280,10 @@ iso9660_stat_t *iso9660_fs_find_lsn_with_path(CdIo_t *p_cdio, lsn_t i_lsn,
                                               /*out*/ char **ppsz_full_filename);
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_ifs_find_lsn_v2() instead.
+
    Given a directory pointer, find the filesystem entry that contains
    lsn and return information about it.
 
@@ -939,6 +1298,10 @@ iso9660_stat_t *iso9660_ifs_find_lsn(iso9660_t *p_iso, lsn_t i_lsn);
 
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_ifs_find_lsn_with_path_v2() instead.
+
    Given a directory pointer, find the filesystem entry that contains
    lsn and return information about it.
 
@@ -963,10 +1326,19 @@ iso9660_stat_t *iso9660_ifs_find_lsn_with_path(iso9660_t *p_iso,
 
   @param p_stat iso9660 stat buffer to free.
 
+  Normally, the argument to this function gets checked whether it looks
+  like an iso9660_stat_t object. If not, then the call issues a log message
+  of level CDIO_LOG_ASSERT.
+  This check is disabled if the macro ISO9660_STAT_NO_RUNTIME_CHECK was
+  defined when the library was compiled.
  */
 void iso9660_stat_free(iso9660_stat_t *p_stat);
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_fs_statv2() instead.
+
   Return file status for psz_path. NULL is returned on error.
 
   @param p_cdio the CD object to read from
@@ -990,6 +1362,10 @@ iso9660_stat_t *iso9660_fs_stat (CdIo_t *p_cdio, const char psz_path[]);
 
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_fs_statv2_translate() instead.
+
   Return file status for path name psz_path. NULL is returned on error.
   pathname version numbers in the ISO 9660 name are dropped, i.e. ;1
   is removed and if level 1 ISO-9660 names are lowercased.
@@ -1006,6 +1382,9 @@ iso9660_stat_t *iso9660_fs_stat_translate (CdIo_t *p_cdio,
                                            const char psz_path[]);
 /*!
 
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_ifs_statv2() instead.
+
   @param p_iso the ISO-9660 file image to get data from
 
   @param psz_path path the look up
@@ -1017,6 +1396,10 @@ iso9660_stat_t *iso9660_ifs_stat (iso9660_t *p_iso, const char psz_path[]);
 
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_ifs_statv2_translate() instead.
+
   @param p_iso the ISO-9660 file image to get data from
 
   @param psz_path filename path translate
@@ -1031,9 +1414,12 @@ iso9660_stat_t *iso9660_ifs_stat_translate (iso9660_t *p_iso,
 
 
 /*!
-  Create a new data structure to hold a list of
-  ISO9660 statbuf-entry pointers for the files inside
-  a directory.
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_filelist_new_v2() instead.
+
+  Create a new data structure to hold a list of pointers to allocated
+  iso9660_stat_t objects.
 
   @return allocated list. Free with iso9660_filelist_free()
 */
@@ -1041,9 +1427,8 @@ CdioISO9660FileList_t * iso9660_filelist_new(void);
 
 
 /*!
-  Create a new data structure to hold a list of
-  ISO9660 statbuf entries for directory
-  pointers for the files inside a directory.
+  Create a new data structure to hold a list of memory objects which each
+  can be completely disposed by a single system call free(3).
 
   @return allocated list. Free with iso9660_dirlist_free()
 */
@@ -1052,18 +1437,30 @@ CdioISO9660DirList_t * iso9660_dirlist_new(void);
 
 
 /*!
-  Free the passed CdioISOC9660FileList_t structure.
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use this function only if you got p_filelist from a deprecated
+      call with no "v2" in its function name.
+      For a file list from a v2 call, use so9660_filelist_free_v2().
+
+  Free the passed CdioISOC9660FileList_t structure and the iso9660_stat_t
+  objects to which its list members point.
 */
 void iso9660_filelist_free(CdioISO9660FileList_t *p_filelist);
 
 
 /*!
-  Free the passed CdioISOC9660Dirlist_t structure.
+  Free the passed CdioISOC9660Dirlist_t structure and the memory objects to
+  which the list members point.
 */
 void iso9660_dirlist_free(CdioISO9660DirList_t *p_filelist);
 
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_fs_readdir_v2() instead.
+
   Read psz_path (a directory) and return a list of iso9660_stat_t
   pointers for the files inside that directory.
 
@@ -1077,6 +1474,10 @@ void iso9660_dirlist_free(CdioISO9660DirList_t *p_filelist);
 CdioList_t * iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[]);
 
 /*!
+
+  *** Deprecated for data files which may be larger than 4 GiB - 1. ***
+      Use iso9660_ifs_readdir_v2() instead.
+
   Read psz_path (a directory) and return a list of iso9660_stat_t
   pointers for the files inside that directory.
 

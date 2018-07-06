@@ -60,7 +60,7 @@ int
 main(int argc, const char *argv[])
 {
   iso9660_t *p_iso;
-  iso9660_stat_t *p_statbuf;
+  iso9660_statv2_t *p_statbuf;
 
   p_iso = iso9660_open(ISO9660_IMAGE);
   if (!p_iso) {
@@ -93,37 +93,52 @@ main(int argc, const char *argv[])
        find "." and in that Rock-Ridge information might be found which fills
        in more stat information that iso9660_fs_find_lsn also will find.
        . Ideally iso9660_fs_stat should be fixed. */
-    p_statbuf = iso9660_ifs_stat (p_iso, "/.");
+    p_statbuf = iso9660_ifs_statv2 (p_iso, "/.");
 
     if (NULL == p_statbuf) {
       fprintf(stderr,
 	      "Could not get ISO-9660 file information for file /.\n");
       iso9660_close(p_iso);
-      iso9660_stat_free(p_statbuf);
+      iso9660_statv2_free(p_statbuf);
       exit(2);
     } else {
       /* Now try getting the statbuf another way */
       char buf[ISO_BLOCKSIZE];
       char *psz_path = NULL;
-      const lsn_t i_lsn = p_statbuf->extent_lsn[0];
-      iso9660_stat_t *p_statbuf2 = iso9660_ifs_find_lsn (p_iso, i_lsn);
-      iso9660_stat_t *p_statbuf3 =
-	iso9660_ifs_find_lsn_with_path (p_iso, i_lsn, &psz_path);
+      lsn_t i_lsn;
+      iso9660_statv2_t *p_statbuf2, *p_statbuf3;
+      uint32_t num_ext, num_ext2, num_ext3;
+      iso9660_extent_descr_t *extents, *extents2, *extents3;
+
+      num_ext = iso9660_statv2_get_extents(p_statbuf, &extents);
+      i_lsn = extents[0].lsn;
+      p_statbuf2 = iso9660_ifs_find_lsn_v2 (p_iso, i_lsn);
+      p_statbuf3 = iso9660_ifs_find_lsn_with_path_v2 (p_iso, i_lsn, &psz_path);
+      if (NULL == p_statbuf2 || NULL == p_statbuf3) {
+	fprintf(stderr, "File stat information could not be found by lsn\n");
+	rc = 8;
+	goto exit;
+      }
 
       /* Compare the two statbufs. */
-      if (p_statbuf->extent_lsn[0] != p_statbuf2->extent_lsn[0] ||
-	  p_statbuf->size != p_statbuf2->size ||
-	  p_statbuf->type != p_statbuf2->type) {
-
+      num_ext2 = iso9660_statv2_get_extents(p_statbuf2, &extents2);
+      if (num_ext != num_ext2 || extents[0].lsn != extents2[0].lsn ||
+	  iso9660_statv2_get_total_size(p_statbuf) !=
+		iso9660_statv2_get_total_size(p_statbuf2) ||
+	  iso9660_statv2_get_type(p_statbuf) !=
+		iso9660_statv2_get_type(p_statbuf2)) {
 	  fprintf(stderr, "File stat information between fs_stat and "
 		  "iso9660_ifs_find_lsn isn't the same\n");
 	  rc = 3;
 	  goto exit;
       }
 
-      if (p_statbuf3->extent_lsn[0] != p_statbuf2->extent_lsn[0] ||
-	  p_statbuf3->size != p_statbuf2->size ||
-	  p_statbuf3->type != p_statbuf2->type) {
+      num_ext3 = iso9660_statv2_get_extents(p_statbuf3, &extents3);
+      if (num_ext3 != num_ext2 || extents3[0].lsn != extents2[0].lsn ||
+	  iso9660_statv2_get_total_size(p_statbuf3) !=
+		iso9660_statv2_get_total_size(p_statbuf2) ||
+	  iso9660_statv2_get_type(p_statbuf3) !=
+		iso9660_statv2_get_type(p_statbuf2)) {
 	rc = 4;
 	goto exit;
       }
@@ -147,16 +162,16 @@ main(int argc, const char *argv[])
       if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, i_lsn, 1) )
 	{
 	  fprintf(stderr, "Error reading ISO 9660 file at lsn %lu\n",
-		  (long unsigned int) p_statbuf->extent_lsn[0]);
+		  (long unsigned int) i_lsn);
 	  rc = 7;
 	  goto exit;
 	}
   exit:
       if (psz_path != NULL)
       	free(psz_path);
-      iso9660_stat_free(p_statbuf2);
-      iso9660_stat_free(p_statbuf3);
-      iso9660_stat_free(p_statbuf);
+      iso9660_statv2_free(p_statbuf2);
+      iso9660_statv2_free(p_statbuf3);
+      iso9660_statv2_free(p_statbuf);
       iso9660_close(p_iso);
       exit(rc);
     }

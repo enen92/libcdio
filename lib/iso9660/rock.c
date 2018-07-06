@@ -39,6 +39,7 @@
 #include <cdio/iso9660.h>
 #include <cdio/logging.h>
 #include <cdio/bytesex.h>
+#include <cdio/util.h>
 #include "filemode.h"
 
 #define CDIO_MKDEV(ma,mi)	((ma)<<16 | (mi))
@@ -48,33 +49,34 @@ iso_rock_nm_flag_t iso_rock_nm_flag;
 iso_rock_sl_flag_t iso_rock_sl_flag;
 iso_rock_tf_flag_t iso_rock_tf_flag;
 
-/* Our own realloc routine tailored for the iso9660_stat_t symlink
+/* Our own realloc routine tailored for the iso_rock_statbuf_t symlink
    field.  I can't figure out how to make realloc() work without
    valgrind complaint.
 */
 static bool
-realloc_symlink(/*in/out*/ iso9660_stat_t *p_stat, uint8_t i_grow)
+realloc_symlink(/*in/out*/ iso_rock_statbuf_t *rr, uint8_t i_grow)
 {
-  if (!p_stat->rr.i_symlink) {
+  if (!rr->i_symlink) {
     const uint16_t i_max = 2*i_grow+1;
-    p_stat->rr.psz_symlink = (char *) calloc(1, i_max);
-    p_stat->rr.i_symlink_max = i_max;
-    return (NULL != p_stat->rr.psz_symlink);
+    rr->psz_symlink = (char *) calloc(1, i_max);
+    rr->i_symlink_max = i_max;
+    return (NULL != rr->psz_symlink);
   } else {
-    unsigned int i_needed = p_stat->rr.i_symlink + i_grow ;
-    if ( i_needed <= p_stat->rr.i_symlink_max)
+    unsigned int i_needed = rr->i_symlink + i_grow ;
+    if ( i_needed <= rr->i_symlink_max)
       return true;
     else {
       char * psz_newsymlink = (char *) calloc(1, 2*i_needed);
       if (!psz_newsymlink) return false;
-      p_stat->rr.i_symlink_max = 2*i_needed;
-      memcpy(psz_newsymlink, p_stat->rr.psz_symlink, p_stat->rr.i_symlink);
-      free(p_stat->rr.psz_symlink);
-      p_stat->rr.psz_symlink = psz_newsymlink;
+      rr->i_symlink_max = 2*i_needed;
+      memcpy(psz_newsymlink, rr->psz_symlink, rr->i_symlink);
+      free(rr->psz_symlink);
+      rr->psz_symlink = psz_newsymlink;
       return true;
     }
   }
 }
+
 
 /* These functions are designed to read the system areas of a directory record
  * and extract relevant information.  There are different functions provided
@@ -91,7 +93,8 @@ realloc_symlink(/*in/out*/ iso9660_stat_t *p_stat, uint8_t i_grow)
 #define CHECK_SP(FAIL)	       			\
       if(rr->u.SP.magic[0] != 0xbe) FAIL;	\
       if(rr->u.SP.magic[1] != 0xef) FAIL;       \
-      p_stat->rr.s_rock_offset = rr->u.SP.skip;
+      p_rr->s_rock_offset = rr->u.SP.skip;
+
 /* We define a series of macros because each function must do exactly the
    same thing in certain places.  We use the macros to ensure that everything
    is done correctly */
@@ -112,10 +115,10 @@ realloc_symlink(/*in/out*/ iso9660_stat_t *p_stat, uint8_t i_grow)
     if(LEN & 1) LEN++;						\
     CHR = ((unsigned char *) DE) + LEN;				\
     LEN = *((unsigned char *) DE) - LEN;			\
-    if (0xff != p_stat->rr.s_rock_offset)			\
+    if (0xff != p_rr->s_rock_offset)				\
       {								\
-	LEN -= p_stat->rr.s_rock_offset;		       	\
-	CHR += p_stat->rr.s_rock_offset;		       	\
+	LEN -= p_rr->s_rock_offset;				\
+	CHR += p_rr->s_rock_offset;				\
 	if (LEN<0) LEN=0;					\
       }								\
   }
@@ -126,16 +129,16 @@ realloc_symlink(/*in/out*/ iso9660_stat_t *p_stat, uint8_t i_grow)
 */
 #define add_time(FLAG, TIME_FIELD)				  \
   if (rr->u.TF.flags & FLAG) {					  \
-    p_stat->rr.TIME_FIELD.b_used = true;			  \
-    p_stat->rr.TIME_FIELD.b_longdate =				  \
+    p_rr->TIME_FIELD.b_used = true;				  \
+    p_rr->TIME_FIELD.b_longdate =				  \
       (0 != (rr->u.TF.flags & ISO_ROCK_TF_LONG_FORM));		  \
-    if (p_stat->rr.TIME_FIELD.b_longdate) {			  \
-      memcpy(&(p_stat->rr.TIME_FIELD.t.ltime),			  \
+    if (p_rr->TIME_FIELD.b_longdate) {				  \
+      memcpy(&(p_rr->TIME_FIELD.t.ltime),			  \
 	     &(rr->u.TF.time_bytes[cnt]),			  \
 	     sizeof(iso9660_ltime_t)); 				  \
       cnt += sizeof(iso9660_ltime_t);				  \
     } else {							  \
-      memcpy(&(p_stat->rr.TIME_FIELD.t.dtime),			  \
+      memcpy(&(p_rr->TIME_FIELD.t.dtime),			  \
 	     &(rr->u.TF.time_bytes[cnt]),			  \
 	     sizeof(iso9660_dtime_t)); 				  \
       cnt += sizeof(iso9660_dtime_t);				  \
@@ -147,9 +150,9 @@ realloc_symlink(/*in/out*/ iso9660_stat_t *p_stat, uint8_t i_grow)
   @return length of name field; 0: not found, -1: to be ignored
 */
 int
-get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
-			/*out*/ char * psz_name,
-			/*in/out*/ iso9660_stat_t *p_stat)
+get_rock_ridge_filename_rr(iso9660_dir_t * p_iso9660_dir,
+			   /*out*/ char * psz_name,
+			   /*in/out*/ iso_rock_statbuf_t *p_rr)
 {
   int len;
   unsigned char *chr;
@@ -158,7 +161,7 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
   int i_namelen = 0;
   int truncate=0;
 
-  if (!p_stat || nope == p_stat->rr.b3_rock) return 0;
+  if (NULL == p_rr || nope == p_rr->b3_rock) return 0;
   *psz_name = 0;
 
   SETUP_ROCK_RIDGE(p_iso9660_dir, chr, len);
@@ -197,7 +200,7 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 	CHECK_CE;
 	break;
       case SIG('E','R'):
-	p_stat->rr.b3_rock = yep;
+	p_rr->b3_rock = yep;
 	cdio_debug("ISO 9660 Extensions: ");
 	{
 	  int p;
@@ -206,7 +209,7 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 	break;
       case SIG('N','M'):
 	/* Alternate name */
-	p_stat->rr.b3_rock = yep;
+	p_rr->b3_rock = yep;
 	if (truncate) break;
 	if (rr->u.NM.flags & ISO_ROCK_NM_PARENT) {
 	  i_namelen = sizeof("..");
@@ -231,11 +234,11 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 	break;
       case SIG('P','X'):
 	/* POSIX file attributes */
-	p_stat->rr.st_mode   = from_733(rr->u.PX.st_mode);
-	p_stat->rr.st_nlinks = from_733(rr->u.PX.st_nlinks);
-	p_stat->rr.st_uid    = from_733(rr->u.PX.st_uid);
-	p_stat->rr.st_gid    = from_733(rr->u.PX.st_gid);
-	p_stat->rr.b3_rock    = yep;
+	p_rr->st_mode   = from_733(rr->u.PX.st_mode);
+	p_rr->st_nlinks = from_733(rr->u.PX.st_nlinks);
+	p_rr->st_uid    = from_733(rr->u.PX.st_uid);
+	p_rr->st_gid    = from_733(rr->u.PX.st_gid);
+	p_rr->b3_rock    = yep;
 	break;
       case SIG('S','L'):
 	{
@@ -245,28 +248,28 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 	  iso_rock_sl_part_t * p_oldsl;
 	  slen = rr->len - 5;
 	  p_sl = &rr->u.SL.link;
-	  p_stat->rr.i_symlink = symlink_len;
+	  p_rr->i_symlink = symlink_len;
 	  while (slen > 1){
 	    rootflag = 0;
 	    switch(p_sl->flags &~1){
 	    case 0:
-	      realloc_symlink(p_stat, p_sl->len);
-	      memcpy(&(p_stat->rr.psz_symlink[p_stat->rr.i_symlink]),
+	      realloc_symlink(p_rr, p_sl->len);
+	      memcpy(&(p_rr->psz_symlink[p_rr->i_symlink]),
 		     p_sl->text, p_sl->len);
-	      p_stat->rr.i_symlink += p_sl->len;
+	      p_rr->i_symlink += p_sl->len;
 	      break;
 	    case 4:
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '.';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '.';
 	      /* continue into next case. */
 	    case 2:
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '.';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '.';
 	      break;
 	    case 8:
 	      rootflag = 1;
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '/';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '/';
 	      break;
 	    default:
 	      cdio_warn("Symlink component flag not implemented");
@@ -277,7 +280,7 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 
 	    if (slen < 2) {
 	      if (((rr->u.SL.flags & 1) != 0) && ((p_oldsl->flags & 1) == 0))
-		p_stat->rr.i_symlink += 1;
+		p_rr->i_symlink += 1;
 	      break;
 	    }
 
@@ -285,14 +288,14 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 	     * If this component record isn't continued, then append a '/'.
 	     */
 	    if (!rootflag && (p_oldsl->flags & 1) == 0) {
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '/';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '/';
 	    }
 	  }
 	}
-	symlink_len = p_stat->rr.i_symlink;
-	realloc_symlink(p_stat, 1);
-	p_stat->rr.psz_symlink[symlink_len]='\0';
+	symlink_len = p_rr->i_symlink;
+	realloc_symlink(p_rr, 1);
+	p_rr->psz_symlink[symlink_len]='\0';
 	break;
       case SIG('R','E'):
 	free(buffer);
@@ -308,7 +311,7 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
 	  add_time(ISO_ROCK_TF_BACKUP,     backup);
 	  add_time(ISO_ROCK_TF_EXPIRATION, expiration);
 	  add_time(ISO_ROCK_TF_EFFECTIVE,  effective);
-	  p_stat->rr.b3_rock = yep;
+	  p_rr->b3_rock = yep;
 	  break;
 	}
       default:
@@ -323,16 +326,27 @@ get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
   return 0;
 }
 
+int
+get_rock_ridge_filename(iso9660_dir_t * p_iso9660_dir,
+			/*out*/ char * psz_name,
+			/*in/out*/ iso9660_stat_t *p_stat)
+{
+  if (NULL == p_stat)
+    return 0;
+  return get_rock_ridge_filename_rr(p_iso9660_dir, psz_name, &(p_stat->rr));
+}
+
+
 static int
 parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
-			       iso9660_stat_t *p_stat, int regard_xa)
+			       iso_rock_statbuf_t *p_rr, int regard_xa)
 {
   int len;
   unsigned char * chr;
   int symlink_len = 0;
   CONTINUE_DECLS;
 
-  if (nope == p_stat->rr.b3_rock) return 0;
+  if (nope == p_rr->b3_rock) return 0;
 
   SETUP_ROCK_RIDGE(p_iso9660_dir, chr, len);
   if (regard_xa)
@@ -363,17 +377,17 @@ parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
 	CHECK_CE;
 	break;
       case SIG('E','R'):
-	p_stat->rr.b3_rock = yep;
+	p_rr->b3_rock = yep;
 	cdio_debug("ISO 9660 Extensions: ");
 	{ int p;
 	  for(p=0;p<rr->u.ER.len_id;p++) cdio_debug("%c",rr->u.ER.data[p]);
 	}
 	break;
       case SIG('P','X'):
-	p_stat->rr.st_mode   = from_733(rr->u.PX.st_mode);
-	p_stat->rr.st_nlinks = from_733(rr->u.PX.st_nlinks);
-	p_stat->rr.st_uid    = from_733(rr->u.PX.st_uid);
-	p_stat->rr.st_gid    = from_733(rr->u.PX.st_gid);
+	p_rr->st_mode   = from_733(rr->u.PX.st_mode);
+	p_rr->st_nlinks = from_733(rr->u.PX.st_nlinks);
+	p_rr->st_uid    = from_733(rr->u.PX.st_uid);
+	p_rr->st_gid    = from_733(rr->u.PX.st_gid);
 	break;
       case SIG('P','N'):
 	/* Device major,minor number */
@@ -388,9 +402,9 @@ parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
 	   * stored in the low field, and use that.
 	   */
 	  if((low & ~0xff) && high == 0) {
-	    p_stat->rr.i_rdev = CDIO_MKDEV(low >> 8, low & 0xff);
+	    p_rr->i_rdev = CDIO_MKDEV(low >> 8, low & 0xff);
 	  } else {
-	    p_stat->rr.i_rdev = CDIO_MKDEV(high, low);
+	    p_rr->i_rdev = CDIO_MKDEV(high, low);
 	  }
 	}
 	break;
@@ -405,7 +419,7 @@ parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
 	  add_time(ISO_ROCK_TF_BACKUP,     backup);
 	  add_time(ISO_ROCK_TF_EXPIRATION, expiration);
 	  add_time(ISO_ROCK_TF_EFFECTIVE,  effective);
-	  p_stat->rr.b3_rock = yep;
+	  p_rr->b3_rock = yep;
 	  break;
 	}
       case SIG('S','L'):
@@ -416,30 +430,30 @@ parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
 	  iso_rock_sl_part_t * p_oldsl;
 	  slen = rr->len - 5;
 	  p_sl = &rr->u.SL.link;
-	  p_stat->rr.i_symlink = symlink_len;
+	  p_rr->i_symlink = symlink_len;
 	  while (slen > 1){
 	    rootflag = 0;
 	    switch(p_sl->flags &~1){
 	    case 0:
-	      realloc_symlink(p_stat, p_sl->len);
+	      realloc_symlink(p_rr, p_sl->len);
 	      if (p_sl->text && p_sl->len)
-		memcpy(&(p_stat->rr.psz_symlink[p_stat->rr.i_symlink]),
+		memcpy(&(p_rr->psz_symlink[p_rr->i_symlink]),
 		       p_sl->text, p_sl->len);
-	      p_stat->rr.i_symlink += p_sl->len;
+	      p_rr->i_symlink += p_sl->len;
 	      break;
 	    case 4:
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '.';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '.';
 	      /* continue into next case. */
 	    case 2:
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '.';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '.';
 	      break;
 	    case 8:
 	      rootflag = 1;
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '/';
-	      p_stat->rr.i_symlink++;
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '/';
+	      p_rr->i_symlink++;
 	      break;
 	    default:
 	      cdio_warn("Symlink component flag not implemented");
@@ -450,7 +464,7 @@ parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
 
 	    if (slen < 2) {
 	      if (((rr->u.SL.flags & 1) != 0) && ((p_oldsl->flags & 1) == 0))
-		p_stat->rr.i_symlink += 1;
+		p_rr->i_symlink += 1;
 	      break;
 	    }
 
@@ -458,36 +472,39 @@ parse_rock_ridge_stat_internal(iso9660_dir_t *p_iso9660_dir,
 	     * If this component record isn't continued, then append a '/'.
 	     */
 	    if (!rootflag && (p_oldsl->flags & 1) == 0) {
-	      realloc_symlink(p_stat, 1);
-	      p_stat->rr.psz_symlink[p_stat->rr.i_symlink++] = '/';
+	      realloc_symlink(p_rr, 1);
+	      p_rr->psz_symlink[p_rr->i_symlink++] = '/';
 	    }
 	  }
 	}
-	symlink_len = p_stat->rr.i_symlink;
-	realloc_symlink(p_stat, 1);
-	p_stat->rr.psz_symlink[symlink_len]='\0';
+	symlink_len = p_rr->i_symlink;
+	realloc_symlink(p_rr, 1);
+	p_rr->psz_symlink[symlink_len]='\0';
 	break;
       case SIG('R','E'):
 	cdio_warn("Attempt to read p_stat for relocated directory");
 	goto out;
 #ifdef FINISHED
+      /* This looks like inspired by Linux fs/isofs/rock.c */
       case SIG('C','L'):
 	{
+	  /* Wrong type. Should be something like iso_rock_statbuf_t */
 	  iso9660_stat_t * reloc;
+	  /* These are Linux kernel macro and function, not libcdio */
 	  ISOFS_I(p_stat)->i_first_extent = from_733(rr->u.CL.location);
-	  reloc = isofs_iget(p_stat->rr.i_sb, p_stat->rr.i_first_extent, 0);
+	  reloc = isofs_iget(p_rr->i_sb, p_rr->i_first_extent, 0);
 	  if (!reloc)
 	    goto out;
-	  p_stat->rr.st_mode   = reloc->st_mode;
-	  p_stat->rr.st_nlinks = reloc->st_nlinks;
-	  p_stat->rr.st_uid    = reloc->st_uid;
-	  p_stat->rr.st_gid    = reloc->st_gid;
-	  p_stat->rr.i_rdev    = reloc->i_rdev;
-	  p_stat->rr.i_symlink = reloc->i_symlink;
-	  p_stat->rr.i_blocks  = reloc->i_blocks;
-	  p_stat->rr.i_atime   = reloc->i_atime;
-	  p_stat->rr.i_ctime   = reloc->i_ctime;
-	  p_stat->rr.i_mtime   = reloc->i_mtime;
+	  p_rr->st_mode   = reloc->st_mode;
+	  p_rr->st_nlinks = reloc->st_nlinks;
+	  p_rr->st_uid    = reloc->st_uid;
+	  p_rr->st_gid    = reloc->st_gid;
+	  p_rr->i_rdev    = reloc->i_rdev;
+	  p_rr->i_symlink = reloc->i_symlink;
+	  p_rr->i_blocks  = reloc->i_blocks;
+	  p_rr->i_atime   = reloc->i_atime;
+	  p_rr->i_ctime   = reloc->i_ctime;
+	  p_rr->i_mtime   = reloc->i_mtime;
 	  iput(reloc);
 	}
 	break;
@@ -510,11 +527,28 @@ parse_rock_ridge_stat(iso9660_dir_t *p_iso9660_dir,
 
   if (!p_stat) return 0;
 
-  result = parse_rock_ridge_stat_internal(p_iso9660_dir, p_stat, 0);
+  result = parse_rock_ridge_stat_internal(p_iso9660_dir, &(p_stat->rr), 0);
   /* if Rock-Ridge flag was reset and we didn't look for attributes
    * behind eventual XA attributes, have a look there */
   if (0xFF == p_stat->rr.s_rock_offset && nope != p_stat->rr.b3_rock) {
-    result = parse_rock_ridge_stat_internal(p_iso9660_dir, p_stat, 14);
+    result = parse_rock_ridge_stat_internal(p_iso9660_dir, &(p_stat->rr), 14);
+  }
+  return result;
+}
+
+int
+parse_rock_ridge_stat_rr(iso9660_dir_t *p_iso9660_dir,
+		         /*out*/ iso_rock_statbuf_t *p_rr)
+{
+  int result;
+
+  if (NULL == p_rr) return 0;
+
+  result = parse_rock_ridge_stat_internal(p_iso9660_dir, p_rr, 0);
+  /* if Rock-Ridge flag was reset and we didn't look for attributes
+   * behind eventual XA attributes, have a look there */
+  if (0xFF == p_rr->s_rock_offset && nope != p_rr->b3_rock) {
+    result = parse_rock_ridge_stat_internal(p_iso9660_dir, p_rr, 14);
   }
   return result;
 }
@@ -626,3 +660,45 @@ iso9660_get_posix_filemode_from_rock(const iso_rock_statbuf_t *rr)
 {
   return (mode_t) rr->st_mode;
 }
+
+
+/* >>> where to put these internal declarations for iso9660_fs.c ? */
+bool iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
+                                         iso_rock_statbuf_t *source);
+
+bool iso9660_rock_statbuf_init(iso_rock_statbuf_t *target);
+
+void iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target);
+
+
+/* For now it is only about the link name */
+
+bool
+iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
+                                    iso_rock_statbuf_t *source)
+{
+  if (NULL != source->psz_symlink) {
+    target->psz_symlink = calloc(1, source->i_symlink_max);
+    if (NULL == target->psz_symlink)
+      return false;
+    memcpy(target->psz_symlink, source->psz_symlink, source->i_symlink);
+    target->i_symlink_max = source->i_symlink_max;
+    target->i_symlink = source->i_symlink;
+  }
+  return true;
+}
+
+bool
+iso9660_rock_statbuf_init(iso_rock_statbuf_t *target)
+{
+  memset(target, 0, sizeof(iso_rock_statbuf_t));
+  target->psz_symlink = NULL;
+  return true;
+}
+
+void
+iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target)
+{
+  CDIO_FREE_IF_NOT_NULL(target->psz_symlink);
+}
+

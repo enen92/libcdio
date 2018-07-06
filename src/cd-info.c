@@ -546,7 +546,7 @@ static void
 print_iso9660_recurse (CdIo_t *p_cdio, const char pathname[],
                        cdio_fs_anal_t fs)
 {
-  CdioISO9660FileList_t *p_entlist;
+  CdioISO9660FileListV2_t *p_entlist;
   CdioISO9660DirList_t *p_dirlist = iso9660_dirlist_new();
   CdioListNode_t *entnode;
   uint8_t i_joliet_level;
@@ -557,7 +557,7 @@ print_iso9660_recurse (CdIo_t *p_cdio, const char pathname[],
     ? 0
     : cdio_get_joliet_level(p_cdio);
 
-  p_entlist = iso9660_fs_readdir(p_cdio, pathname);
+  p_entlist = iso9660_fs_readdir_v2(p_cdio, pathname);
 
   printf ("%s:\n", pathname);
 
@@ -571,8 +571,8 @@ print_iso9660_recurse (CdIo_t *p_cdio, const char pathname[],
 
   _CDIO_LIST_FOREACH (entnode, p_entlist)
     {
-      iso9660_stat_t *p_statbuf = _cdio_list_node_data (entnode);
-      char *psz_iso_name = p_statbuf->filename;
+      iso9660_statv2_t *p_statbuf = _cdio_list_node_data (entnode);
+      char *psz_iso_name = iso9660_statv2_get_filename(p_statbuf);
       char _fullname[4096] = { 0, };
        if (strlen(psz_iso_name) >= translated_name_size) {
          translated_name_size = strlen(psz_iso_name)+1;
@@ -583,7 +583,8 @@ print_iso9660_recurse (CdIo_t *p_cdio, const char pathname[],
          }
        }
 
-      if (yep != p_statbuf->rr.b3_rock || 1 == opts.no_rock_ridge) {
+      if (yep != iso9660_statv2_get_rr(p_statbuf)->b3_rock
+	  || 1 == opts.no_rock_ridge) {
         iso9660_name_translate_ext(psz_iso_name, translated_name,
                                    i_joliet_level);
       }
@@ -594,20 +595,17 @@ print_iso9660_recurse (CdIo_t *p_cdio, const char pathname[],
 
       strncat (_fullname, "/", sizeof(_fullname) - strlen(_fullname) - 1);
 
-      if (p_statbuf->type == _STAT_DIR
+      if (iso9660_statv2_get_type(p_statbuf) == _STAT_DIR
           && strcmp (psz_iso_name, ".")
           && strcmp (psz_iso_name, ".."))
         _cdio_list_append (p_dirlist, strdup (_fullname));
 
-      print_fs_attrs(p_statbuf, 0 == opts.no_rock_ridge, fs & CDIO_FS_ANAL_XA,
-                     psz_iso_name, translated_name);
-      if (p_statbuf->rr.i_symlink) {
-        free(p_statbuf->rr.psz_symlink);
-        p_statbuf->rr.i_symlink = 0;
-      }
+      print_fs_attrs_v2(p_statbuf, 0 == opts.no_rock_ridge,
+			fs & CDIO_FS_ANAL_XA,
+			psz_iso_name, translated_name);
     }
 
-  iso9660_filelist_free(p_entlist);
+  iso9660_filelist_free_v2(p_entlist);
 
   printf ("\n");
 

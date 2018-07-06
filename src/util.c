@@ -474,33 +474,34 @@ report (FILE *stream, const char *psz_format,  ...)
 }
 
 /* Prints "ls"-like file attributes */
-void
-print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
-	       const char *psz_name_untranslated,
-	       const char *psz_name_translated)
+static void
+print_fs_attrs_ext(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
+		   const char *psz_name_untranslated,
+		   const char *psz_name_translated,
+		   uint32_t num_extents,
+		   iso9660_extent_descr_t *extents,
+	 	   uint64_t total_size_in)
 {
   char date_str[30];
 
+  /* easier to print than uint64_t and sufficient here */
+  double total_size = total_size_in;
+
 #ifdef HAVE_ROCK
+  double symlink_len = 0;
+
+  if (p_statbuf->rr.psz_symlink != NULL)
+    symlink_len = strlen(p_statbuf->rr.psz_symlink);
   if (yep == p_statbuf->rr.b3_rock && b_rock) {
-    report ( stdout, "  %s %3d %d %d [LSN %6lu] %9u",
+    report ( stdout, "  %s %3d %d %d [LSN %6lu] %9.f",
 	     iso9660_get_rock_attr_str (p_statbuf->rr.st_mode),
 	     p_statbuf->rr.st_nlinks,
 	     p_statbuf->rr.st_uid,
 	     p_statbuf->rr.st_gid,
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	     (long unsigned int) p_statbuf->lsn,
-#else
-	     (long unsigned int) p_statbuf->extent_lsn[0],
-#endif
+	     (long unsigned int) extents[0].lsn,
 	     S_ISLNK(p_statbuf->rr.st_mode)
-	     ? strlen(p_statbuf->rr.psz_symlink)
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	     : (unsigned int) p_statbuf->size );
-#else
-	     : (unsigned int) p_statbuf->total_size );
-#endif
-
+	     ? symlink_len
+	     : total_size );
   } else
 #endif
   if (b_xa) {
@@ -509,37 +510,19 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
 	     uint16_from_be (p_statbuf->xa.user_id),
 	     uint16_from_be (p_statbuf->xa.group_id),
 	     p_statbuf->xa.filenum,
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	     (long unsigned int) p_statbuf->lsn );
-#else
-	     (long unsigned int) p_statbuf->extent_lsn[0] );
-#endif
+	     (long unsigned int) extents[0].lsn );
 
     if (uint16_from_be(p_statbuf->xa.attributes) & XA_ATTR_MODE2FORM2) {
-      report ( stdout, "%9u (%9u)",
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	       (unsigned int) p_statbuf->secsize * M2F2_SECTOR_SIZE,
-	       (unsigned int) p_statbuf->size );
-#else
-	       (unsigned int) CDIO_EXTENT_BLOCKS(p_statbuf->extent_size[0])* M2F2_SECTOR_SIZE,
-	       (unsigned int) p_statbuf->total_size );
-#endif
+      report ( stdout, "%9u (%9.f)",
+	       (unsigned int) CDIO_EXTENT_BLOCKS(extents[0].size)* M2F2_SECTOR_SIZE,
+	       total_size );
     } else
-#ifndef DO_NOT_WANT_COMPATIBILITY
-      report (stdout, "%9u", (unsigned int) p_statbuf->size);
-#else
-      report (stdout, "%9u", (unsigned int) p_statbuf->total_size);
-#endif
+      report (stdout, "%9.f", total_size);
   } else {
-    report ( stdout,"  %c [LSN %6lu] %9u",
+    report ( stdout,"  %c [LSN %6lu] %9.f",
 	     (p_statbuf->type == _STAT_DIR) ? 'd' : '-',
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	     (long unsigned int) p_statbuf->lsn,
-	     (unsigned int) p_statbuf->size );
-#else
-	     (long unsigned int) p_statbuf->extent_lsn[0],
-	     (unsigned int) p_statbuf->total_size );
-#endif
+	     (long unsigned int) extents[0].lsn,
+	     total_size );
   }
 
   if (yep == p_statbuf->rr.b3_rock && b_rock) {
@@ -569,4 +552,46 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
   }
 
   report(stdout, "\n");
+}
+
+void
+print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
+	       const char *psz_name_untranslated,
+	       const char *psz_name_translated)
+{
+  uint32_t num_extents = 1;
+  iso9660_extent_descr_t extents[1];
+  uint64_t total_size;
+
+  extents[0].lsn = p_statbuf->lsn;
+  extents[0].size = p_statbuf->size;
+  total_size = p_statbuf->size;
+  print_fs_attrs_ext(p_statbuf, b_rock, b_xa, psz_name_untranslated,
+		     psz_name_translated, num_extents, extents, total_size);
+}
+
+void
+print_fs_attrs_v2(iso9660_statv2_t *p_statv2, bool b_rock, bool b_xa,
+                  const char *psz_name_untranslated,
+                  const char *psz_name_translated)
+{
+  iso9660_stat_t *p_statbuf = NULL;
+  uint32_t num_extents;
+  iso9660_extent_descr_t *extents;
+
+  /* Obtain a legacy statbuf which offers its members for direct access ... */
+  p_statbuf = iso9660_statv2_get_v1(p_statv2);
+  if (NULL == p_statbuf)
+    return;
+
+  /* ... but take file data info from the modern statbuf object, which can
+     handle files of 4 GiB and larger.
+   */
+  num_extents = iso9660_statv2_get_extents(p_statv2, &extents);
+
+  print_fs_attrs_ext(p_statbuf, b_rock, b_xa, psz_name_untranslated,
+		     psz_name_translated, num_extents, extents,
+	 	     iso9660_statv2_get_total_size(p_statv2));
+
+  iso9660_stat_free(p_statbuf);
 }

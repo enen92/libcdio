@@ -238,6 +238,10 @@ typedef uint8_t ubyte;
     yep   = 1,
     dunno = 2
   } bool_3way_t;
+  /*             WARNING: Never define a value 3 for bool_3way_t !
+     iso9660_fs.c relies on not 3 when distinguishing legacy iso9660_stat_t
+     from modern iso9660_statv2_t.
+   */
 
   /* type used for bit-fields in structs (1 <= bits <= 8) */
 #if defined(__GNUC__)

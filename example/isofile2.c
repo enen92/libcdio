@@ -69,7 +69,7 @@
 
 #define my_exit(rc)				\
   fclose (p_outfd);				\
-  free(p_statbuf);				\
+  iso9660_statv2_free(p_statbuf);		\
   cdio_destroy(p_cdio);				\
   return rc;					\
 
@@ -77,7 +77,7 @@
 int
 main(int argc, const char *argv[])
 {
-  iso9660_stat_t *p_statbuf;
+  iso9660_statv2_t *p_statbuf;
   FILE *p_outfd;
   int i, j;
   char const *psz_image;
@@ -86,6 +86,8 @@ main(int argc, const char *argv[])
   char untranslated_name[256] = ISO9660_PATH;
   CdIo_t *p_cdio;
   unsigned int i_fname=sizeof(ISO9660_FILENAME);
+  uint32_t num_extents;
+  iso9660_extent_descr_t *extents;
 
   if (argc > 3) {
     printf("usage %s [CD-ROM-or-image [filename]]\n", argv[0]);
@@ -114,7 +116,7 @@ main(int argc, const char *argv[])
     return 1;
   }
 
-  p_statbuf = iso9660_fs_stat (p_cdio, untranslated_name);
+  p_statbuf = iso9660_fs_statv2 (p_cdio, untranslated_name);
 
   if (NULL == p_statbuf)
     {
@@ -130,16 +132,17 @@ main(int argc, const char *argv[])
   if (!(p_outfd = fopen (translated_name, "wb"))) {
       perror ("fopen()");
       cdio_destroy(p_cdio);
-      free(p_statbuf);
+      iso9660_statv2_free(p_statbuf);
       return 3;
     }
 
   /* Copy the blocks from the ISO-9660 filesystem to the local filesystem. */
-  for (j = 0; j < p_statbuf->num_extents; j++) {
-    const unsigned int i_blocks = CEILING(p_statbuf->extent_size[j], ISO_BLOCKSIZE);
+  num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
+  for (j = 0; j < num_extents; j++) {
+    const unsigned int i_blocks = CEILING(extents[j].size, ISO_BLOCKSIZE);
     for (i = 0; i < i_blocks; i ++) {
       char buf[ISO_BLOCKSIZE];
-      const lsn_t lsn = p_statbuf->extent_lsn[j] + i;
+      const lsn_t lsn = extents[j].lsn + i;
 
       memset (buf, 0, ISO_BLOCKSIZE);
 
@@ -164,7 +167,7 @@ main(int argc, const char *argv[])
   /* Make sure the file size has the exact same byte size. Without the
      truncate below, the file will a multiple of ISO_BLOCKSIZE.
    */
-  if (ftruncate (fileno (p_outfd), p_statbuf->size))
+  if (ftruncate (fileno (p_outfd), iso9660_statv2_get_total_size(p_statbuf)))
     perror ("ftruncate()");
 
   printf("-- Extraction of file '%s' from '%s' successful.\n",
