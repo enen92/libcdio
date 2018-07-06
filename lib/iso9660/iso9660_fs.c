@@ -864,7 +864,7 @@ _iso9660_statbuf_alloc_extents(iso9660_statv2_t *p_stat, int num_extents)
   p_stat->extents = calloc(num_extents, sizeof(iso9660_extent_descr_t));
   if (p_stat->extents == NULL) {
     cdio_warn("Could not allocate %lu bytes",
-             (unsigned long) num_extents * sizeof(iso9660_extent_descr_t));
+             (unsigned long) (num_extents * sizeof(iso9660_extent_descr_t)));
     return false;
   }
   return true;
@@ -911,7 +911,6 @@ iso9660_statv2_new(bool single_extent)
     return NULL;
   }
   p_stat->magic_number[0] = 0xff;
-  p_stat->magic_number[1] = 2;
   p_stat->extents = NULL;
   p_stat->filename = NULL;
 
