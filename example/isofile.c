@@ -67,7 +67,7 @@ main(int argc, const char *argv[])
 {
   iso9660_statv2_t *p_statbuf;
   FILE *p_outfd;
-  int i, j;
+  int j;
   char const *psz_image;
   char const *psz_fname;
   char const *psz_target;
@@ -127,10 +127,13 @@ main(int argc, const char *argv[])
   num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
 
   for (j = 0; j < num_extents; j++) {
-    const unsigned int i_blocks = CEILING(extents[j].size, ISO_BLOCKSIZE);
-    for (i = 0; i < i_blocks ; i++) {
+    uint32_t to_write;
+    size_t write_now;
+    lsn_t lsn = extents[j].lsn;
+
+    to_write = extents[j].size;
+    while (to_write > 0) {
       char buf[ISO_BLOCKSIZE];
-      const lsn_t lsn = extents[j].lsn + i;
 
       memset (buf, 0, ISO_BLOCKSIZE);
 
@@ -140,22 +143,20 @@ main(int argc, const char *argv[])
 	my_exit(4);
       }
 
-      fwrite (buf, ISO_BLOCKSIZE, 1, p_outfd);
+      write_now = to_write > ISO_BLOCKSIZE ? ISO_BLOCKSIZE : to_write;
+      fwrite (buf, write_now, 1, p_outfd);
 
       if (ferror (p_outfd)) {
 	perror ("fwrite()");
 	my_exit(5);
       }
+
+      to_write -= write_now;
+      lsn++;
     }
   }
 
   fflush (p_outfd);
-
-  /* Make sure the file size has the exact same byte size. Without the
-     truncate below, the file will a multiple of ISO_BLOCKSIZE.
-   */
-  if (ftruncate (fileno (p_outfd), iso9660_statv2_get_total_size(p_statbuf)))
-    perror ("ftruncate()");
 
   printf("Extraction of file '%s' from %s successful.\n", 
 	 psz_fname, psz_image);

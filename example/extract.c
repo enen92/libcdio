@@ -194,8 +194,8 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
 
 #else
 
-  size_t j;
-  int64_t i_extent_length;
+  size_t j, write_now;
+  uint32_t i_extent_length;
   iso9660_stat_t *p_statbuf = NULL;
   iso9660_statv2_t *p_statv2;
   CdioISO9660FileListV2_t* p_entlist;
@@ -289,13 +289,15 @@ static int iso_extract_files(iso9660_t* p_iso, const char *psz_path)
               psz_iso_name, (long unsigned int)lsn);
             goto out;
           }
-          fwrite(buf, (size_t)MIN(i_extent_length, ISO_BLOCKSIZE), 1, fd);
+          write_now = i_extent_length > ISO_BLOCKSIZE ?
+                      ISO_BLOCKSIZE : i_extent_length;
+          fwrite(buf, write_now, 1, fd);
           if (ferror(fd)) {
             fprintf(stderr, "  Error writing file %s: %s\n", psz_iso_name,
               strerror(errno));
             goto out;
           }
-          i_extent_length -= ISO_BLOCKSIZE;
+          i_extent_length -= write_now;
         }
       }
 

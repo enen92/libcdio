@@ -66,7 +66,7 @@
 int
 main(int argc, const char *argv[])
 {
-  CdioISO9660FileList_t *p_entlist;
+  CdioISO9660FileListV2_t *p_entlist;
   CdioListNode_t *p_entnode;
   char const *psz_fname;
   iso9660_t *p_iso;
@@ -96,7 +96,7 @@ main(int argc, const char *argv[])
     print_vd_info("Volume Set ", iso9660_ifs_get_volumeset_id);
   }
 
-  p_entlist = iso9660_ifs_readdir (p_iso, psz_path);
+  p_entlist = iso9660_ifs_readdir_v2 (p_iso, psz_path);
 
   /* Iterate over the list of nodes that iso9660_ifs_readdir gives  */
 
@@ -104,15 +104,20 @@ main(int argc, const char *argv[])
     _CDIO_LIST_FOREACH (p_entnode, p_entlist)
     {
       char filename[4096];
-      iso9660_stat_t *p_statbuf =
-	(iso9660_stat_t *) _cdio_list_node_data (p_entnode);
-      iso9660_name_translate(p_statbuf->filename, filename);
+      uint32_t num_extents;
+      iso9660_extent_descr_t *extents;
+      iso9660_statv2_t *p_statbuf =
+	(iso9660_statv2_t *) _cdio_list_node_data (p_entnode);
+
+      num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
+      iso9660_name_translate(iso9660_statv2_get_filename(p_statbuf), filename);
       printf ("%s [LSN %6d] %8u %s%s\n",
-	      2 == p_statbuf->type ? "d" : "-",
-	      p_statbuf->lsn, p_statbuf->size, psz_path, filename);
+	      2 == iso9660_statv2_get_type(p_statbuf) ? "d" : "-",
+	      extents[0].lsn, iso9660_statv2_get_total_size(p_statbuf),
+              psz_path, filename);
     }
 
-   iso9660_filelist_free(p_entlist);
+   iso9660_filelist_free_v2(p_entlist);
   }
 
 

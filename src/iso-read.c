@@ -211,10 +211,13 @@ static int read_iso_file(const char *iso_name, const char *src,
                          FILE *outfd, size_t *bytes_written)
 {
   iso9660_statv2_t *statbuf;
-  int i, j;
+  int j;
   iso9660_t *iso;
   uint32_t num_extents;
   iso9660_extent_descr_t *extents;
+  uint32_t to_write;
+  size_t write_now;
+  lsn_t lsn;
 
   iso = iso9660_open (iso_name);
 
@@ -243,27 +246,32 @@ static int read_iso_file(const char *iso_name, const char *src,
   /* Copy the blocks from the ISO-9660 filesystem to the local filesystem. */
   num_extents = iso9660_statv2_get_extents(statbuf, &extents);
   for (j = 0; j < num_extents; j++) {
-    for (i = 0; i < extents[j].size; i += ISO_BLOCKSIZE) {
+    to_write = extents[j].size;
+    lsn = extents[j].lsn;
+
+    while (to_write > 0) {
       char buf[ISO_BLOCKSIZE];
 
       memset (buf, 0, ISO_BLOCKSIZE);
 
-      if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (iso, buf, extents[j].lsn
-                                                   + (i / ISO_BLOCKSIZE),
-                                                   1) )
+      if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (iso, buf, lsn, 1) )
       {
         report(stderr, "Error reading ISO 9660 file at lsn %lu\n",
-               (long unsigned int) extents[j].lsn + (i / ISO_BLOCKSIZE));
+               (long unsigned int) lsn);
         if (!opts.ignore) return 4;
       }
 
-      fwrite (buf, ISO_BLOCKSIZE, 1, outfd);
+      write_now = to_write > ISO_BLOCKSIZE ? ISO_BLOCKSIZE : to_write;
+      fwrite (buf, write_now, 1, outfd);
 
       if (ferror (outfd))
         {
           perror ("fwrite()");
           return 5;
         }
+
+      to_write -= write_now;
+      lsn++;
     }
   }
   iso9660_close(iso);
@@ -378,6 +386,7 @@ main(int argc, char *argv[])
 
   /* Make sure the file size has the exact same byte size. Without the
      truncate below, the file will a multiple of ISO_BLOCKSIZE.
+     (Not any more in case of ISO 9660.)
    */
   if (ftruncate (fileno (outfd), bytes_written))
     perror ("ftruncate()");

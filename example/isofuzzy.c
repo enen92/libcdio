@@ -55,7 +55,7 @@
 int
 main(int argc, const char *argv[])
 {
-  CdioISO9660FileList_t *p_entlist;
+  CdioISO9660FileListV2_t *p_entlist;
   CdioListNode_t *entnode;
   char const *psz_fname;
   iso9660_t *p_iso;
@@ -73,7 +73,7 @@ main(int argc, const char *argv[])
     return 1;
   }
 
-  p_entlist = iso9660_ifs_readdir (p_iso, "/");
+  p_entlist = iso9660_ifs_readdir_v2 (p_iso, "/");
 
   /* Iterate over the list of nodes that iso9660_ifs_readdir gives  */
 
@@ -81,13 +81,13 @@ main(int argc, const char *argv[])
     _CDIO_LIST_FOREACH (entnode, p_entlist)
     {
       char filename[4096];
-      iso9660_stat_t *p_statbuf =
-	(iso9660_stat_t *) _cdio_list_node_data (entnode);
-      iso9660_name_translate(p_statbuf->filename, filename);
+      iso9660_statv2_t *p_statbuf =
+	(iso9660_statv2_t *) _cdio_list_node_data (entnode);
+      iso9660_name_translate(iso9660_statv2_get_filename(p_statbuf), filename);
       printf ("-- /%s\n", filename);
     }
 
-    iso9660_filelist_free(p_entlist);
+    iso9660_filelist_free_v2(p_entlist);
   }
 
   iso9660_close(p_iso);
