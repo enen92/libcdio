@@ -858,6 +858,28 @@ iso9660_get_posix_filemode(const iso9660_stat_t *p_iso_dirent)
   return mode;
 }
 
+/*!
+  Returns POSIX mode bitstring for a given file.
+*/
+mode_t
+iso9660_get_posix_filemode_v2(const iso9660_statv2_t *p_iso_dirent)
+{
+  mode_t mode = 0;
+  iso9660_xa_t *p_xa;
+  iso9660_statv2_t *p_stat = (iso9660_statv2_t *) p_iso_dirent;
+
+#ifdef HAVE_ROCK
+  if (yep == iso9660_statv2_get_rr(p_stat)->b3_rock) {
+      return iso9660_get_posix_filemode_from_rock(
+                                                iso9660_statv2_get_rr(p_stat));
+  } else
+#endif
+  if (iso9660_statv2_get_xa(p_stat, &p_xa)) {
+    return iso9660_get_posix_filemode_from_xa(p_xa->attributes);
+  }
+  return mode;
+}
+
 static const iso_path_table_t *
 pathtable_get_entry (const void *pt, unsigned int entrynum)
 {

@@ -1538,9 +1538,14 @@ lsn_t iso9660_get_dir_extent(const iso9660_dir_t *p_idr);
   char * iso9660_dir_to_name (const iso9660_dir_t *p_iso9660_dir);
 
   /*!
-    Returns a POSIX mode for a given p_iso_dirent.
+    Returns a POSIX mode for a given legacy iso9660_stat_t object.
   */
   mode_t iso9660_get_posix_filemode(const iso9660_stat_t *p_iso_dirent);
+
+  /*!
+    Returns a POSIX mode for a given iso9660_statv2_t object.
+  */
+  mode_t iso9660_get_posix_filemode_v2(const iso9660_statv2_t *p_iso_dirent);
 
   /*!
     Return a string containing the preparer id with trailing

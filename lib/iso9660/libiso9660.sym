@@ -39,6 +39,7 @@ iso9660_get_ltime
 iso9660_get_posix_filemode
 iso9660_get_posix_filemode_from_rock
 iso9660_get_posix_filemode_from_xa
+iso9660_get_posix_filemode_v2
 iso9660_get_preparer_id
 iso9660_get_publisher_id
 iso9660_get_pvd_block_size
