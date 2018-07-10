@@ -100,11 +100,17 @@ static long int iso9660_seek_read_framesize (const iso9660_t *p_iso,
 					     long int size,
 					     uint16_t i_framesize);
 
-/*! Maximum number of file extents. It gets allocated during creation of
-    iso9660_statv2_t and adjusted to the actually necessary size when
-    creation is complete.
-  */
-#define ISO_MAX_MULTIEXTENT 100
+/*! Initial maximum number of file extents. It gets allocated during creation
+    of iso9660_statv2_t, possibly expanded during assessment, and adjusted
+    to the actually necessary size when creation is complete.
+ */
+#define ISO9660_STATV2_INIT_EXTENT 100
+
+/*! Hard limit of number of file extents in order to curb the effect of ill
+    input. (2049 full-sized extents suffice to reach the maximum ISO size of
+    2 exp 32 blocks.)
+ */
+#define ISO9660_STATV2_MAX_EXTENT 10000
 
 /*! Number of bytes in the magic number of iso9660_statv2_s */
 #define ISO9660_STATV2_MAGIC_SIZE 1
@@ -130,6 +136,7 @@ struct iso9660_statv2_s {
 
   /** number of extents */
   uint32_t           num_extents;
+  uint32_t           allocated_extents;
 
   /** array of extent descriptions */
   struct iso9660_extent_descr_s *extents;
@@ -867,6 +874,7 @@ _iso9660_statbuf_alloc_extents(iso9660_statv2_t *p_stat, int num_extents)
              (unsigned long) (num_extents * sizeof(iso9660_extent_descr_t)));
     return false;
   }
+  p_stat->allocated_extents = num_extents;
   return true;
 }
 
@@ -920,7 +928,7 @@ iso9660_statv2_new(bool single_extent)
   }
 
   if (!_iso9660_statbuf_alloc_extents(p_stat, single_extent ?
-					      1 : ISO_MAX_MULTIEXTENT)) {
+					     1 : ISO9660_STATV2_INIT_EXTENT)) {
     free(p_stat); /* intentionally not iso9660_statv2_free() */
     return NULL;
   }
@@ -973,6 +981,36 @@ no_memory:;
 }
 
 
+static bool
+_iso9660_statbuf_realloc_extents(iso9660_statv2_t *p_stat, uint32_t num)
+{
+  iso9660_extent_descr_t *extents;
+  uint32_t allocated_extents;
+
+  if (num > ISO9660_STATV2_MAX_EXTENT) {
+    cdio_warn("Warning: Too many multiextent file parts for '%s' : %lu",
+	      p_stat->filename, (unsigned long) num);
+    return false;
+  }
+  if (num < p_stat->num_extents) {
+    cdio_warn(
+      "Warning: Caught attempt to fatally reduce number of data file extents");
+    return true; /* p_stat still has more extents than were demanded */
+  }
+  extents = p_stat->extents;
+  allocated_extents = p_stat->allocated_extents;
+  if (!_iso9660_statbuf_alloc_extents(p_stat, num)) {
+    p_stat->extents = extents;
+    p_stat->allocated_extents = allocated_extents;
+    return false;
+  }
+  memcpy(p_stat->extents, extents,
+         p_stat->num_extents * sizeof(iso9660_extent_descr_t));
+  free(extents);
+  return true;
+}
+
+
 /*!
    @param single_extent Submit true to allocate only a single extent.
                         Submit false to allocate the maximum number of extents.
@@ -1000,12 +1038,23 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   /* (if p_stat is not NULL, then it will be re-used to add more extents) */
   if (NULL == p_stat) {
     p_stat = iso9660_statv2_new(single_extent);
-    if (!p_stat)
+    if (NULL == p_stat)
       return NULL;
+  } else if (p_stat->num_extents >= p_stat->allocated_extents) {
+    if (!_iso9660_statbuf_realloc_extents(p_stat,
+			   p_stat->num_extents + ISO9660_STATV2_INIT_EXTENT)) {
+      iso9660_statv2_free(p_stat);
+      return NULL;
+    }
   }
 
+#ifdef ISO9660_WITH_FILE_TYPE_ENUM
   p_stat->type    = (p_iso9660_dir->file_flags & ISO_DIRECTORY)
-    ? _STAT_DIR : _STAT_FILE;
+		    ? _STAT_DIR : _STAT_FILE;
+#else
+  p_stat->type    = (p_iso9660_dir->file_flags & ISO_DIRECTORY) ? 2 : 1;
+#endif
+
   p_stat->extents[p_stat->num_extents].lsn = from_733 (p_iso9660_dir->extent);
   p_stat->extents[p_stat->num_extents].size = from_733 (p_iso9660_dir->size);
   p_stat->total_size += p_stat->extents[p_stat->num_extents].size;
@@ -1066,12 +1115,6 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
                                    &(p_iso9660_dir->filename.str[1]), i_fname))
 	  goto fail;
   }
-  if (p_stat->num_extents >= ISO_MAX_MULTIEXTENT) {
-      cdio_warn("Warning: Too many multiextent file parts for '%s'",
-		p_stat->filename);
-      iso9660_statv2_free(p_stat);
-      return NULL;
-  }
   p_stat->num_extents++;
 
   iso9660_get_dtime(&(p_iso9660_dir->recording_time), true, &(p_stat->tm));
@@ -1131,17 +1174,7 @@ fail:
 static bool
 _iso9660_statbuf_adj_extents(iso9660_statv2_t *p_stat)
 {
-  iso9660_extent_descr_t *extents;
-
-  extents = p_stat->extents;
-  if (!_iso9660_statbuf_alloc_extents(p_stat, p_stat->num_extents)) {
-    p_stat->extents = extents;
-    return false;
-  }
-  memcpy(p_stat->extents, extents,
-         p_stat->num_extents * sizeof(iso9660_extent_descr_t));
-  free(extents);
-  return true;
+  return _iso9660_statbuf_realloc_extents(p_stat, p_stat->num_extents);
 }
 
 
@@ -1615,6 +1648,7 @@ iso9660_fs_readdir_v2 (CdIo_t *p_cdio, const char psz_path[])
     uint8_t *_dirbuf = NULL;
     uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extents[0].size);
     CdioISO9660DirList_t *retval = _cdio_list_new ();
+    bool skip_following_extents = false;
 
     _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
     if (!_dirbuf)
@@ -1639,10 +1673,20 @@ iso9660_fs_readdir_v2 (CdIo_t *p_cdio, const char psz_path[])
 	if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
   	  continue;
 
-	p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
-						 p_iso9660_stat, dunno,
-						 p_env->u_joliet_level,
-						 false);
+	if (skip_following_extents) {
+	  /* Do not register remaining extents of ill file */
+	  p_iso9660_stat = NULL;
+	} else {
+	  p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
+						   p_iso9660_stat, dunno,
+						   p_env->u_joliet_level,
+						   false);
+	  if (NULL == p_iso9660_stat)
+	    skip_following_extents = true; /* Start ill file mode */
+	}
+	if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
+	  skip_following_extents = false; /* Ill or not: The file ends now */
+
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
@@ -1695,6 +1739,7 @@ iso9660_ifs_readdir_v2 (iso9660_t *p_iso, const char psz_path[])
     uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extents[0].size);
     CdioList_t *retval = _cdio_list_new ();
     const size_t dirbuf_len = blocks * ISO_BLOCKSIZE;
+    bool skip_following_extents = false;
 
 
     if (!dirbuf_len)
@@ -1730,11 +1775,21 @@ iso9660_ifs_readdir_v2 (iso9660_t *p_iso, const char psz_path[])
 	if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
 	  continue;
 
-	p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
-						 p_iso9660_stat,
-						 p_iso->b_xa,
-						 p_iso->u_joliet_level,
-						 false);
+	if (skip_following_extents) {
+	  /* Do not register remaining extents of ill file */
+	  p_iso9660_stat = NULL;
+	} else {
+	  p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
+						   p_iso9660_stat,
+						   p_iso->b_xa,
+						   p_iso->u_joliet_level,
+						   false);
+	  if (NULL == p_iso9660_stat)
+	    skip_following_extents = true; /* Start ill file mode */
+	}
+	if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
+	  skip_following_extents = false; /* Ill or not: The file ends now */
+
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
