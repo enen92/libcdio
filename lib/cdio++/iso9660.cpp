@@ -36,7 +36,7 @@
 ISO9660::Stat *
 ISO9660::FS::find_lsn(lsn_t i_lsn)
 {
-  return new Stat(iso9660_find_fs_lsn(p_cdio, i_lsn));
+  return new Stat(iso9660_fs_find_lsn_v2(p_cdio, i_lsn));
 }
 
 /*!
@@ -65,22 +65,25 @@ ISO9660::FS::read_superblock (iso_extension_mask_t iso_extension_mask)
   return iso9660_fs_read_superblock (p_cdio, iso_extension_mask);
 }
 
-/*! Read psz_path (a directory) and return a list of iso9660_stat_t
+/*! Read psz_path (a directory) and return a list of iso9660_stat*_t
   pointers for the files inside that directory. The caller must free the
   returned result.
 */
 bool
 ISO9660::FS::readdir (const char psz_path[], stat_vector_t& stat_vector)
 {
-  CdioList_t * p_stat_list = iso9660_fs_readdir (p_cdio, psz_path);
+  CdioList_t * p_stat_list = iso9660_fs_readdir_v2 (p_cdio, psz_path);
   if (p_stat_list) {
     CdioListNode_t *p_entnode;
     _CDIO_LIST_FOREACH (p_entnode, p_stat_list) {
-      iso9660_stat_t *p_statbuf =
-	(iso9660_stat_t *) _cdio_list_node_data (p_entnode);
+      iso9660_statv2_t *p_statbuf =
+	(iso9660_statv2_t *) _cdio_list_node_data (p_entnode);
       stat_vector.push_back(new ISO9660::Stat(p_statbuf));
     }
-    _cdio_list_free (p_stat_list, false, (CdioDataFree_t) iso9660_stat_free);
+    /* explicitely not iso9660_filelist_free_v2(p_stat_list) because
+       the p_statbuf objects live on in stat_vector.
+    */
+    _cdio_list_free (p_stat_list, false, (CdioDataFree_t) NULL);
     return true;
   } else {
     return false;
@@ -112,7 +115,7 @@ ISO9660::IFS::close()
 ISO9660::Stat *
 ISO9660::IFS::find_lsn(lsn_t i_lsn)
 {
-  return new Stat(iso9660_ifs_find_lsn(p_iso9660, i_lsn));
+  return new Stat(iso9660_ifs_find_lsn_v2(p_iso9660, i_lsn));
 }
 
 /*!

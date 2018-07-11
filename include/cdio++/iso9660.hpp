@@ -114,32 +114,77 @@ public:
   {
   public:
 
+    iso9660_statv2_t *p_statv2;
     iso9660_stat_t *p_stat;
     typedef vector< ISO9660::Stat *> stat_vector_t;
 
+    /* Deprecated constructor input. Use iso9660_statv2_t instead.
+
+       Stat instances created with iso9660_stat_t will have p_statv2 == NULL
+       and thus offer no multi-extent capability.
+     */
     Stat(iso9660_stat_t *p_new_stat)
     {
       p_stat = p_new_stat;
     };
 
+    Stat(iso9660_statv2_t *p_new_stat)
+    {
+      p_statv2 = p_new_stat;
+      p_stat = iso9660_statv2_get_v1(p_new_stat);
+    };
+
     Stat(const Stat& copy_in)
     {
-      free(p_stat);
-      p_stat = (iso9660_stat_t *)
-        calloc( 1, sizeof(iso9660_stat_t)
-                + strlen(copy_in.p_stat->filename)+1 );
-      p_stat = copy_in.p_stat;
+      size_t stat_size, sym_size;
+
+      iso9660_stat_free(p_stat);
+
+      stat_size = sizeof(iso9660_stat_t) + strlen(copy_in.p_stat->filename) + 1;
+      p_stat = (iso9660_stat_t *) calloc( 1, stat_size );
+
+      memcpy(p_stat, copy_in.p_stat, stat_size);
+      if (NULL != copy_in.p_stat->rr.psz_symlink) {
+        sym_size = strlen(copy_in.p_stat->rr.psz_symlink) + 1;
+        p_stat->rr.psz_symlink = (char *) calloc(1, sym_size);
+        memcpy(p_stat->rr.psz_symlink, copy_in.p_stat->rr.psz_symlink,
+               sym_size);
+      }
+
+      if (p_statv2)
+        iso9660_statv2_free(p_statv2);
+      if (copy_in.p_statv2)
+        p_statv2 = iso9660_statv2_clone(copy_in.p_statv2);
     }
 
     const Stat& operator= (const Stat& right)
     {
-      free(p_stat);
-      this->p_stat = right.p_stat;
+      size_t stat_size, sym_size;
+
+      iso9660_stat_free(p_stat);
+
+      stat_size = sizeof(iso9660_stat_t) + strlen(right.p_stat->filename) + 1;
+      this->p_stat = (iso9660_stat_t *) calloc( 1, stat_size );
+      memcpy(this->p_stat, right.p_stat, stat_size);
+      if (NULL != right.p_stat->rr.psz_symlink) {
+        sym_size = strlen(right.p_stat->rr.psz_symlink) + 1;
+        this->p_stat->rr.psz_symlink = (char *) calloc(1, sym_size);
+        memcpy(this->p_stat->rr.psz_symlink, right.p_stat->rr.psz_symlink,
+               sym_size);
+      }
+
+      if (p_statv2)
+        iso9660_statv2_free(p_statv2);
+      if (right.p_statv2)
+        p_statv2 = iso9660_statv2_clone(right.p_statv2);
       return right;
     }
 
     ~Stat()
     {
+      if (p_statv2)
+        iso9660_statv2_free(p_statv2);
+      p_statv2 = NULL;
       iso9660_stat_free(p_stat);
       p_stat = NULL;
     }
@@ -176,7 +221,7 @@ public:
     */
     bool read_superblock (iso_extension_mask_t iso_extension_mask);
 
-    /*! Read psz_path (a directory) and return a vector of iso9660_stat_t
+    /*! Read psz_path (a directory) and return a vector of iso9660_stat*_t
       pointers for the files inside that directory. The caller must free the
       returned result.
     */
@@ -197,9 +242,9 @@ public:
     stat (const char psz_path[], bool b_translate=false)
     {
       if (b_translate)
-        return new Stat(iso9660_fs_stat_translate (p_cdio, psz_path));
+        return new Stat(iso9660_fs_statv2_translate (p_cdio, psz_path));
       else
-        return new Stat(iso9660_fs_stat (p_cdio, psz_path));
+        return new Stat(iso9660_fs_statv2 (p_cdio, psz_path));
     }
   };
 
@@ -369,22 +414,26 @@ public:
                            =ISO_EXTENSION_NONE,
                            uint16_t i_fuzz=20);
 
-    /*! Read psz_path (a directory) and return a list of iso9660_stat_t
+    /*! Read psz_path (a directory) and return a list of iso9660_stat*_t
       pointers for the files inside that directory. The caller must free
       the returned result.
     */
     bool readdir (const char psz_path[], stat_vector_t& stat_vector)
     {
-      CdioISO9660FileList_t *p_stat_list = iso9660_ifs_readdir (p_iso9660, psz_path);
+      CdioISO9660FileListV2_t *p_stat_list =
+                                  iso9660_ifs_readdir_v2 (p_iso9660, psz_path);
 
       if (p_stat_list) {
         CdioListNode_t *p_entnode;
         _CDIO_LIST_FOREACH (p_entnode, p_stat_list) {
-          iso9660_stat_t *p_statbuf =
-            (iso9660_stat_t *) _cdio_list_node_data (p_entnode);
+          iso9660_statv2_t *p_statbuf =
+            (iso9660_statv2_t *) _cdio_list_node_data (p_entnode);
           stat_vector.push_back(new ISO9660::Stat(p_statbuf));
         }
-	iso9660_filelist_free(p_stat_list);
+	/* explicitely not iso9660_filelist_free_v2(p_stat_list) because
+           the p_statbuf objects live on in stat_vector.
+         */
+        _cdio_list_free(p_stat_list, false, (CdioDataFree_t) NULL);
         return true;
       } else {
         return false;
@@ -408,9 +457,9 @@ public:
     stat (const char psz_path[], bool b_translate=false)
     {
       if (b_translate)
-        return new Stat(iso9660_ifs_stat_translate (p_iso9660, psz_path));
+        return new Stat(iso9660_ifs_statv2_translate (p_iso9660, psz_path));
       else
-        return new Stat(iso9660_ifs_stat (p_iso9660, psz_path));
+        return new Stat(iso9660_ifs_statv2 (p_iso9660, psz_path));
     }
 
   private:

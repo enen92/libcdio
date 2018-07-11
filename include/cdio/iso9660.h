@@ -1043,9 +1043,15 @@ iso9660_statv2_t *iso9660_ifs_find_lsn_with_path_v2(iso9660_t *p_iso,
  */
 iso9660_statv2_t *iso9660_ifs_find_lsn_v2(iso9660_t *p_iso, lsn_t i_lsn);
 
+/*!
+  Create an independent copy of the input object.
+  @return pointer to copied object, or NULL in case of failure.
+  The caller must free a non-NULL return value using iso9660_statv2_free().
+ */
+iso9660_statv2_t *iso9660_statv2_clone(iso9660_statv2_t *orig);
 
 /*!
-  Free the passed iso9660_statv2_t structure.
+  Free the passed iso9660_statv2_t object.
 
   @param p_stat iso9660 stat buffer to free.
 

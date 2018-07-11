@@ -102,11 +102,16 @@ main(int argc, const char *argv[])
     for(i=stat_vector.begin(); i != stat_vector.end(); ++i)
       {
 	char filename[4096];
+	double total_size;
 	ISO9660::Stat *p_s = *i;
+
 	iso9660_name_translate(p_s->p_stat->filename, filename);
-	printf ("%s [LSN %6d] %8u %s%s\n",
+	total_size = iso9660_statv2_get_total_size(p_s->p_statv2);
+	printf ("%s [LSN %6d] %8.f %s%s\n",
 		2 == p_s->p_stat->type ? "d" : "-",
-		p_s->p_stat->lsn, p_s->p_stat->size, psz_path, filename);
+		p_s->p_stat->lsn, total_size, psz_path, filename);
+	/* stat_vector.clear() currently does not dispose the objects */
+	delete(p_s);
       }
 
     stat_vector.clear();

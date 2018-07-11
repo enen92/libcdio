@@ -936,7 +936,7 @@ iso9660_statv2_new(bool single_extent)
 }
 
 
-static iso9660_statv2_t *
+iso9660_statv2_t *
 iso9660_statv2_clone(iso9660_statv2_t *orig)
 {
   iso9660_statv2_t *p_stat; 

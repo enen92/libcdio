@@ -65,10 +65,12 @@ main(int argc, const char *argv[])
 {
   ISO9660::Stat *p_stat;
   FILE *p_outfd;
-  unsigned int i;
+  unsigned int j;
   char const *psz_image;
   char const *psz_fname;
   ISO9660::IFS *p_iso = new ISO9660::IFS;
+  uint32_t num_extents;
+  iso9660_extent_descr_t *extents;
 
   if (argc > 3) {
     printf("usage %s [ISO9660-image.ISO [filename]]\n", argv[0]);
@@ -111,12 +113,15 @@ main(int argc, const char *argv[])
     }
 
   /* Copy the blocks from the ISO-9660 filesystem to the local filesystem. */
-  {
-    const unsigned int i_blocks = CEILING(p_stat->p_stat->size, ISO_BLOCKSIZE);
-    for (i = 0; i < i_blocks ; i++) 
-    {
+  num_extents = iso9660_statv2_get_extents(p_stat->p_statv2, &extents);
+  for (j = 0; j < num_extents; j++) {
+    uint32_t to_write;
+    size_t write_now;
+    lsn_t lsn = extents[j].lsn;
+
+    to_write = extents[j].size;
+    while (to_write > 0) {
       char buf[ISO_BLOCKSIZE];
-      const lsn_t lsn = p_stat->p_stat->lsn + i;
 
       memset (buf, 0, ISO_BLOCKSIZE);
       
@@ -126,24 +131,22 @@ main(int argc, const char *argv[])
 		psz_fname, (long unsigned int) lsn);
 	my_exit(4);
       }
-      
-      fwrite (buf, ISO_BLOCKSIZE, 1, p_outfd);
+
+      write_now = to_write > ISO_BLOCKSIZE ? ISO_BLOCKSIZE : to_write;
+      fwrite (buf, write_now, 1, p_outfd);
       
       if (ferror (p_outfd))
 	{
 	  perror ("fwrite()");
 	  my_exit(5);
 	}
+
+      to_write -= write_now;
+      lsn++;
     }
   }
   
   fflush (p_outfd);
-
-  /* Make sure the file size has the exact same byte size. Without the
-     truncate below, the file will a multiple of ISO_BLOCKSIZE.
-   */
-  if (ftruncate (fileno (p_outfd), p_stat->p_stat->size))
-    perror ("ftruncate()");
 
   printf("Extraction of file '%s' from %s successful.\n", 
 	 psz_fname, psz_image);

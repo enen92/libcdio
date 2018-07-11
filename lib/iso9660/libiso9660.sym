@@ -97,6 +97,7 @@ iso9660_set_ltime
 iso9660_set_ltime_with_timezone
 iso9660_set_pvd
 iso9660_stat_free
+iso9660_statv2_clone
 iso9660_statv2_free
 iso9660_statv2_get_extents
 iso9660_statv2_get_filename
