@@ -159,20 +159,6 @@ struct iso9660_statv2_s {
   char               *filename;
 };
 
-#ifdef ISO9660_SEMI_PRIVATE_ROCK_LOCALLY
-
-/* >>> Find a better place to declare these functions.
-       Implemented in  lib/iso9660/rock.c
- */
-bool iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
-                                         iso_rock_statbuf_t *source);
-bool iso9660_rock_statbuf_init(iso_rock_statbuf_t *target);
-void iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target);
-
-#endif /* ISO9660_SEMI_PRIVATE_ROCK_LOCALLY */
-
-
-
 /* Adjust the p_iso's i_datastart, i_byte_offset and i_framesize
    based on whether we find a frame header or not.
 */
@@ -943,7 +929,7 @@ iso9660_statv2_new(bool single_extent)
 iso9660_statv2_t *
 iso9660_statv2_clone(iso9660_statv2_t *orig)
 {
-  iso9660_statv2_t *p_stat; 
+  iso9660_statv2_t *p_stat;
 
   cdio_assert (_iso9660_demand_statv2(orig, "iso9660_statv2_clone"));
 
@@ -1373,7 +1359,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_statv2_t *_root,
 {
   unsigned offset = 0;
   uint8_t *_dirbuf = NULL;
-  uint32_t blocks; 
+  uint32_t blocks;
   int ret, cmp;
   iso9660_statv2_t *p_stat = NULL;
   iso9660_dir_t *p_iso9660_dir = NULL;
@@ -2467,5 +2453,3 @@ iso9660_statv2_get_v1(iso9660_statv2_t *p_stat)
 {
   return _iso9660_statv2_to_stat(p_stat);
 }
-
-

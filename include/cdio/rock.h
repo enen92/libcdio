@@ -1,7 +1,7 @@
 /*
     Copyright (C) 2005, 2006 2008, 2012 Rocky Bernstein <rocky@gnu.org>
 
-    See also rock.c by Eric Youngdale (1993) from GNU/Linux 
+    See also rock.c by Eric Youngdale (1993) from GNU/Linux
     This is Copyright 1993 Yggdrasil Computing, Incorporated
 
     This program is free software: you can redistribute it and/or modify
@@ -18,10 +18,10 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 /*!
-   \file rock.h 
+   \file rock.h
    \brief Things related to the Rock Ridge Interchange Protocol (RRIP)
 
-   Applications will probably not include this directly but via 
+   Applications will probably not include this directly but via
    the iso9660.h header.
 */
 
@@ -102,6 +102,7 @@ typedef struct iso_su_sp_s{
   uint8_t       skip;
 } GNUC_PACKED iso_su_sp_t;
 
+
 /*! system-use extension record */
 typedef struct iso_su_er_s {
   iso711_t      len_id;  /**< Identifier length. Value 10?. */
@@ -119,13 +120,13 @@ typedef struct iso_su_ce_s {
 
 /*! POSIX file attributes, PX. See Rock Ridge Section 4.1.2 */
 typedef struct iso_rock_px_s {
-  iso733_t st_mode;       /*! file mode permissions; same as st_mode 
+  iso733_t st_mode;       /*! file mode permissions; same as st_mode
                             of POSIX:5.6.1 */
   iso733_t st_nlinks;     /*! number of links to file; same as st_nlinks
                             of POSIX:5.6.1 */
   iso733_t st_uid;        /*! user id owner of file; same as st_uid
                             of POSIX:5.6.1 */
-  iso733_t st_gid;        /*! group id of file; same as st_gid of 
+  iso733_t st_gid;        /*! group id of file; same as st_gid of
                             of POSIX:5.6.1 */
 } GNUC_PACKED iso_rock_px_t ;
 
@@ -245,10 +246,10 @@ typedef struct iso_rock_sf_s {
 
 typedef struct iso_extension_record_s {
   char signature[2];   /**< signature word; either 'SP', 'CE', 'ER', 'RR',
-                          'PX', 'PN', 'SL', 'NM', 'CL', 'PL', 'TF', or 
+                          'PX', 'PN', 'SL', 'NM', 'CL', 'PL', 'TF', or
                           'ZF' */
   iso711_t len;        /**< length of system-user area - 44 for PX
-                          20 for PN, 5+strlen(text) for SL, 21 for 
+                          20 for PN, 5+strlen(text) for SL, 21 for
                           SF, etc. */
   iso711_t version;    /**< version number - value 1 */
   union {
@@ -268,11 +269,11 @@ typedef struct iso_extension_record_s {
 } GNUC_PACKED iso_extension_record_t;
 
 typedef struct iso_rock_time_s {
-  bool          b_used;     /**< If true, field has been set and  is valid. 
+  bool          b_used;     /**< If true, field has been set and  is valid.
                                Otherwise remaning fields are meaningless. */
-  bool          b_longdate;  /**< If true date format is a iso9660_ltime_t. 
+  bool          b_longdate;  /**< If true date format is a iso9660_ltime_t.
                                Otherwise date is iso9660_dtime_t */
-  union 
+  union
   {
     iso9660_ltime_t ltime;
     iso9660_dtime_t dtime;
@@ -280,7 +281,7 @@ typedef struct iso_rock_time_s {
 } GNUC_PACKED iso_rock_time_t;
 
 typedef struct iso_rock_statbuf_s {
-  bool_3way_t   b3_rock;              /**< has Rock Ridge extension. 
+  bool_3way_t   b3_rock;              /**< has Rock Ridge extension.
                                          If "yep", then the fields
                                          are used.
                                       */
@@ -295,23 +296,23 @@ typedef struct iso_rock_statbuf_s {
                                          of pointed to file.  */
   iso_rock_time_t create;             /**< create time See ISO 9660:9.5.4. */
   iso_rock_time_t modify;             /**< time of last modification
-                                         ISO 9660:9.5.5. st_mtime field of 
+                                         ISO 9660:9.5.5. st_mtime field of
                                          POSIX:5.6.1. */
-  iso_rock_time_t access;             /**< time of last file access st_atime 
+  iso_rock_time_t access;             /**< time of last file access st_atime
                                          field of POSIX:5.6.1. */
   iso_rock_time_t attributes;         /**< time of last attribute change.
                                          st_ctime field of POSIX:5.6.1. */
   iso_rock_time_t backup;             /**< time of last backup. */
-  iso_rock_time_t expiration;         /**< time of expiration; See ISO 
+  iso_rock_time_t expiration;         /**< time of expiration; See ISO
                                          9660:9.5.6. */
   iso_rock_time_t effective;          /**< Effective time; See ISO 9660:9.5.7.
                                        */
-  uint32_t i_rdev;                    /**< the upper 16-bits is major device 
+  uint32_t i_rdev;                    /**< the upper 16-bits is major device
                                          number, the lower 16-bits is the
                                          minor device number */
 
 } iso_rock_statbuf_t;
-  
+
 PRAGMA_END_PACKED
 
 /*! return length of name field; 0: not found, -1: to be ignored */
@@ -322,7 +323,7 @@ int get_rock_ridge_filename_rr(iso9660_dir_t * p_iso9660_dir,
 /*! Variation of above with deprecated legacy iso9660_stat_t rather
     than iso_rock_statbuf_t.
  */
-int get_rock_ridge_filename(iso9660_dir_t * de, /*out*/ char * retname, 
+int get_rock_ridge_filename(iso9660_dir_t * de, /*out*/ char * retname,
                             /*out*/ iso9660_stat_t *p_stat);
 
 /*! There is no get_rock_ridge_filename_v2(). Use instead:
@@ -338,26 +339,26 @@ int get_rock_ridge_filename(iso9660_dir_t * de, /*out*/ char * retname,
   /*!
     Returns POSIX mode bitstring for a given file.
   */
-  mode_t 
+  mode_t
   iso9660_get_posix_filemode_from_rock(const iso_rock_statbuf_t *rr);
 
 /*!
-  Returns a string which interpreting the POSIX mode st_mode. 
+  Returns a string which interpreting the POSIX mode st_mode.
   For example:
   \verbatim
   drwxrws---
   -rw---Sr--
   lrwxrwxrwx
   \endverbatim
-  
+
   A description of the characters in the string follows
   The 1st character is either "d" if the entry is a directory, "l" is
   a symbolic link or "-" if neither.
-  
+
   The 2nd to 4th characters refer to permissions for a user while the
-  the 5th to 7th characters refer to permissions for a group while, and 
-  the 8th to 10h characters refer to permissions for everyone. 
-  
+  the 5th to 7th characters refer to permissions for a group while, and
+  the 8th to 10h characters refer to permissions for everyone.
+
   In each of these triplets the first character (2, 5, 8) is "r" if
   the entry is allowed to be read.
 
@@ -377,7 +378,7 @@ int get_rock_ridge_filename(iso9660_dir_t * de, /*out*/ char * retname,
 const char *iso9660_get_rock_attr_str(posix_mode_t st_mode);
 
 /** These variables are not used, but are defined to facilatate debugging
-    by letting us use enumerations values (which also correspond to 
+    by letting us use enumerations values (which also correspond to
     \#define's inside a debugged program.
  */
 extern iso_rock_nm_flag_t iso_rock_nm_flag;
@@ -390,7 +391,7 @@ extern iso_rock_tf_flag_t iso_rock_tf_flag;
 
 #endif /* CDIO_ROCK_H_ */
 
-/* 
+/*
  * Local variables:
  *  c-file-style: "gnu"
  *  tab-width: 8
