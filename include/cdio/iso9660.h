@@ -1156,6 +1156,17 @@ char *iso9660_statv2_get_filename(iso9660_statv2_t *p_stat);
 */
 
 /*!
+  Tell whether a file has more than one extent which together do not form
+  a gapless sequence of bytes from start LSN of the first extent up to
+  the total_size of bytes.
+  If the answer is yes, then the file cannot be read naively from start LSN
+  without addressing extent starts and counting extent bytes.
+  If the answer is no, then such a simple read loop will yield the correct
+  file content.
+*/
+bool iso9660_statv2_has_extent_gaps(iso9660_statv2_t *p_stat);
+
+/*!
   Derive a legacy iso9660_stat_t object from a iso9660_statv2_t object.
 
   This is provided to ease the transition of applications to iso9660_statv2_t,

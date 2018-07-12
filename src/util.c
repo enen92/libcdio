@@ -480,6 +480,7 @@ print_fs_attrs_ext(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
 		   const char *psz_name_translated,
 		   uint32_t num_extents,
 		   iso9660_extent_descr_t *extents,
+		   bool has_gap,
 	 	   uint64_t total_size_in)
 {
   char date_str[30];
@@ -493,11 +494,12 @@ print_fs_attrs_ext(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
   if (p_statbuf->rr.psz_symlink != NULL)
     symlink_len = strlen(p_statbuf->rr.psz_symlink);
   if (yep == p_statbuf->rr.b3_rock && b_rock) {
-    report ( stdout, "  %s %3d %d %d [LSN %6lu] %9.f",
+    report ( stdout, "  %s %3d %d %d [%s %6lu] %9.f",
 	     iso9660_get_rock_attr_str (p_statbuf->rr.st_mode),
 	     p_statbuf->rr.st_nlinks,
 	     p_statbuf->rr.st_uid,
 	     p_statbuf->rr.st_gid,
+	     has_gap ? "LSN_WITH_GAP" : "LSN",
 	     (long unsigned int) extents[0].lsn,
 	     S_ISLNK(p_statbuf->rr.st_mode)
 	     ? symlink_len
@@ -567,7 +569,8 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
   extents[0].size = p_statbuf->size;
   total_size = p_statbuf->size;
   print_fs_attrs_ext(p_statbuf, b_rock, b_xa, psz_name_untranslated,
-		     psz_name_translated, num_extents, extents, total_size);
+		     psz_name_translated, num_extents, extents, false,
+		     total_size);
 }
 
 void
@@ -591,6 +594,7 @@ print_fs_attrs_v2(iso9660_statv2_t *p_statv2, bool b_rock, bool b_xa,
 
   print_fs_attrs_ext(p_statbuf, b_rock, b_xa, psz_name_untranslated,
 		     psz_name_translated, num_extents, extents,
+		     iso9660_statv2_has_extent_gaps(p_statv2),
 	 	     iso9660_statv2_get_total_size(p_statv2));
 
   iso9660_stat_free(p_statbuf);

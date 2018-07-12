@@ -125,6 +125,12 @@ struct iso9660_statv2_s {
   */
   uint8_t magic_number[ISO9660_STATV2_MAGIC_SIZE];
 
+  /** A few bits to flag conditions:
+      bit0 = Non-contiguous string of data extents.
+             File content cannot be read sequentially.
+   */
+  uint8_t flags;
+
   /** Rock Ridge-specific fields  */
   iso_rock_statbuf_t rr;
 
@@ -1020,6 +1026,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   iso9660_statv2_t *p_stat = last_p_stat;
   char rr_fname[256] = "";
   int  i_rr_fname;
+  lsn_t extent_lsn;
 
   if (!dir_len) return NULL;
 
@@ -1045,9 +1052,26 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   p_stat->type    = (p_iso9660_dir->file_flags & ISO_DIRECTORY) ? 2 : 1;
 #endif
 
-  p_stat->extents[p_stat->num_extents].lsn = from_733 (p_iso9660_dir->extent);
+  extent_lsn = from_733 (p_iso9660_dir->extent);
+
+  /* Test for gaps between extents. Important: Use previous .total_size */
+  if (p_stat->num_extents > 0) {
+    /* This is a follow-up extent. Check for a gap. */
+    if (p_stat->extents[0].lsn + p_stat->total_size / ISO_BLOCKSIZE
+								!= extent_lsn
+	|| p_stat->total_size % ISO_BLOCKSIZE) {
+      /* Gap detected. Report, but do not throw error. */
+      if (!(p_stat->flags & 1)) {
+        cdio_info("Non-contiguous data extents with '%s'", p_stat->filename);
+        p_stat->flags |= 1;
+      }
+    }
+  }
+  /* Only now update .total_size */
+  p_stat->total_size += from_733 (p_iso9660_dir->size);
+
+  p_stat->extents[p_stat->num_extents].lsn = extent_lsn;
   p_stat->extents[p_stat->num_extents].size = from_733 (p_iso9660_dir->size);
-  p_stat->total_size += p_stat->extents[p_stat->num_extents].size;
   p_stat->rr.b3_rock = dunno; /*FIXME should do based on mask */
   p_stat->b_xa    = false;
 
@@ -2206,6 +2230,12 @@ iso9660_statv2_get_filename(iso9660_statv2_t *p_stat)
 {
   cdio_assert (_iso9660_demand_statv2(p_stat, "iso9660_statv2_get_filename"));
   return p_stat->filename;
+}
+
+bool
+iso9660_statv2_has_extent_gaps(iso9660_statv2_t *p_stat)
+{
+  return (bool) (p_stat->flags & 1);
 }
 
 

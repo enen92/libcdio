@@ -107,6 +107,7 @@ iso9660_statv2_get_type
 iso9660_statv2_get_rr
 iso9660_statv2_get_v1
 iso9660_statv2_get_xa
+iso9660_statv2_has_extent_gaps
 iso9660_strncpy_pad
 iso9660_xa_init
 iso9660_xa_free

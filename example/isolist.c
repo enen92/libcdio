@@ -114,11 +114,12 @@ main(int argc, const char *argv[])
       num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
       if (num_extents > 1)
 	sprintf(psz_extents, " [%lu extents]", (unsigned long) num_extents);
-      printf ("%s [LSN %8d] %12" PRIi64 " %s%s%s\n",
+      printf ("%s [%s %8d] %12" PRIi64 " %s%s%s\n",
 		_STAT_DIR == iso9660_statv2_get_type(p_statbuf) ? "d" : "-",
+		iso9660_statv2_has_extent_gaps(p_statbuf) ?
+						"LSN_WITH_GAPS" : "LSN",
 		extents[0].lsn, iso9660_statv2_get_total_size(p_statbuf),
-		psz_path, filename,
-		num_extents < 2 ? "" : psz_extents);
+		psz_path, filename, num_extents < 2 ? "" : psz_extents);
     }
 
     iso9660_filelist_free_v2(p_entlist);
