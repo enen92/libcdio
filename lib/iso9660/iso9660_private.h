@@ -32,9 +32,9 @@
 
 #include <cdio/types.h>
 
-#ifdef HAVE_STDBOOL_H
-# include <stdbool.h>
-#endif 
+#ifndef CDIO_ISO9660_H_
+# include <cdio/iso9660.h>
+#endif
 
 #define ISO_VERSION             1
 
@@ -75,10 +75,15 @@ typedef struct iso_path_table_s {
 
 PRAGMA_END_PACKED
 
+bool iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
+                                         iso_rock_statbuf_t *source);
+bool iso9660_rock_statbuf_init(iso_rock_statbuf_t *target);
+void iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target);
+
 #endif /* CDIO_ISO0660_ISO9660_PRIVATE_H_ */
 
 
-/* 
+/*
  * Local variables:
  *  c-file-style: "gnu"
  *  tab-width: 8

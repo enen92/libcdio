@@ -597,7 +597,7 @@ struct iso9660_stat_s { /* big endian!! */
   char               filename[EMPTY_ARRAY_SIZE];    /**< filename */
 };
 
-/*! \brief *** Deprecated *** data type for a list of deprecated iso9660_stat_t 
+/*! \brief *** Deprecated *** data type for a list of deprecated iso9660_stat_t
   pointers returned from the various deprecated Cdio iso9660 readdir routines.
  */
 typedef CdioList_t CdioISO9660FileList_t;
@@ -801,7 +801,7 @@ typedef struct _iso9660_s iso9660_t;
     tm will reported in GMT.
   */
   bool iso9660_get_dtime (const iso9660_dtime_t *idr_date, bool b_localtime,
-                          /*out*/ struct tm *tm);
+                          /*out*/ struct tm *p_tm);
 
 
   /*!

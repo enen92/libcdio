@@ -42,6 +42,8 @@
 #include <cdio/util.h>
 #include "filemode.h"
 
+#include "iso9660_private.h"
+
 #define CDIO_MKDEV(ma,mi)	((ma)<<16 | (mi))
 
 enum iso_rock_enums iso_rock_enums;
@@ -662,16 +664,9 @@ iso9660_get_posix_filemode_from_rock(const iso_rock_statbuf_t *rr)
 }
 
 
-/* >>> where to put these internal declarations for iso9660_fs.c ? */
-bool iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
-                                         iso_rock_statbuf_t *source);
-
-bool iso9660_rock_statbuf_init(iso_rock_statbuf_t *target);
-
-void iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target);
-
-
-/* For now it is only about the link name */
+/* Memory management methods for external callers.
+   For now it is only about the link name.
+ */
 
 bool
 iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
