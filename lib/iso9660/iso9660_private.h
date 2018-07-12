@@ -32,9 +32,7 @@
 
 #include <cdio/types.h>
 
-#ifndef CDIO_ISO9660_H_
-# include <cdio/iso9660.h>
-#endif
+#include <cdio/iso9660.h>
 
 #define ISO_VERSION             1
 
