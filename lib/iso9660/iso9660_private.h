@@ -75,6 +75,19 @@ typedef struct iso_path_table_s {
 
 PRAGMA_END_PACKED
 
+
+/* #define ISO9660_SEMI_PRIVATE_ROCK_LOCALLY for_now_yes */
+
+#ifndef ISO9660_SEMI_PRIVATE_ROCK_LOCALLY
+
+/* Interface of rock.c to be called by iso9660_fs.c */
+bool iso9660_rock_statbuf_clone_entrails(iso_rock_statbuf_t *target,
+                                         iso_rock_statbuf_t *source);
+bool iso9660_rock_statbuf_init(iso_rock_statbuf_t *target);
+void iso9660_rock_statbuf_free_entrails(iso_rock_statbuf_t *target);
+
+#endif /* ISO9660_SEMI_PRIVATE_ROCK_LOCALLY */
+
 #endif /* CDIO_ISO0660_ISO9660_PRIVATE_H_ */
 
 
