@@ -825,8 +825,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
     if (p_stat->num_extents != 0) {
       if (strcmp(p_stat->filename, &p_iso9660_dir->filename.str[1]) != 0) {
 	cdio_warn("Non consecutive multiextent file parts for '%s'", p_stat->filename);
-	free(p_stat);
-	return NULL;
+	goto fail;
       }
     }
     i_rr_fname =
@@ -844,8 +843,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
         if (!p_stat_new)
           {
           cdio_warn("Couldn't calloc(1, %d)", (int)(sizeof(iso9660_stat_t)+i_rr_fname+2));
-	  free(p_stat);
-          return NULL;
+	  goto fail;
           }
 	memcpy(p_stat_new, p_stat, stat_len);
 	free(p_stat);
@@ -867,8 +865,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
           free(p_psz_out);
         }
         else {
-          free(p_stat);
-          return NULL;
+          goto fail;
         }
       }
 #endif /*HAVE_JOLIET*/
@@ -882,9 +879,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   }
   if (p_stat->num_extents >= ISO_MAX_MULTIEXTENT) {
       cdio_warn("Warning: Too many multiextent file parts for '%s'", p_stat->filename);
-      free(p_stat->rr.psz_symlink);
-      free(p_stat);
-      return NULL;
+      goto fail;
   }
   p_stat->num_extents++;
 
@@ -936,6 +931,9 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   }
   return p_stat;
 
+fail:
+  iso9660_stat_free(p_stat);
+  return NULL;
 }
 
 /*!
@@ -1099,7 +1097,7 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
 	  if (!trans_fname) {
 	    cdio_warn("can't allocate %lu bytes",
 		      (long unsigned int) strlen(p_iso9660_stat->filename));
-	    free(p_iso9660_stat);
+	    iso9660_stat_free(p_iso9660_stat);
 	    return NULL;
 	  }
 	  iso9660_name_translate_ext(p_iso9660_stat->filename, trans_fname,
@@ -1205,7 +1203,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 	  if (!trans_fname) {
 	    cdio_warn("can't allocate %lu bytes",
 		      (long unsigned int) strlen(p_stat->filename));
-	    free(p_stat);
+	    iso9660_stat_free(p_stat);
 	    return NULL;
 	  }
 	  iso9660_name_translate_ext(p_stat->filename, trans_fname,
@@ -1267,7 +1265,7 @@ iso9660_fs_stat (CdIo_t *p_cdio, const char psz_path[])
 
   p_psz_splitpath = _cdio_strsplit (psz_path, '/');
   p_stat = _fs_stat_traverse (p_cdio, p_root, p_psz_splitpath);
-  free(p_root);
+  iso9660_stat_free(p_root);
   _cdio_strfreev (p_psz_splitpath);
 
   return p_stat;
@@ -1300,7 +1298,7 @@ fs_stat_translate (void *p_image, stat_root_t stat_root,
 
   p_psz_splitpath = _cdio_strsplit (psz_path, '/');
   p_stat = stat_traverse (p_image, p_root, p_psz_splitpath);
-  free(p_root);
+  iso9660_stat_free(p_root);
   _cdio_strfreev (p_psz_splitpath);
 
   return p_stat;
@@ -1370,7 +1368,7 @@ iso9660_ifs_stat (iso9660_t *p_iso, const char psz_path[])
 
   splitpath = _cdio_strsplit (psz_path, '/');
   stat = _fs_iso_stat_traverse (p_iso, p_root, splitpath);
-  free(p_root);
+  iso9660_stat_free(p_root);
   _cdio_strfreev (splitpath);
 
   return stat;
@@ -1820,7 +1818,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
           have_rr = iso_have_rr_traverse (p_iso, p_stat, &splitpath[i_last_component],
 					  pu_file_limit);
       }
-      free(p_stat);
+      iso9660_stat_free(p_stat);
       if (have_rr != nope) {
         free (_dirbuf);
         return have_rr;
@@ -1870,7 +1868,7 @@ iso9660_have_rr(iso9660_t *p_iso, uint64_t u_file_limit)
   if (u_file_limit == 0) u_file_limit = UINT64_MAX;
 
   is_rr = iso_have_rr_traverse (p_iso, p_root, p_psz_splitpath, &u_file_limit);
-  free(p_root);
+  iso9660_stat_free(p_root);
   free(p_psz_splitpath[0]);
   free(p_psz_splitpath[1]);
 
