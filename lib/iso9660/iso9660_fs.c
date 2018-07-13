@@ -1411,6 +1411,7 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
     uint8_t *_dirbuf = NULL;
     uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
     CdioISO9660DirList_t *retval = _cdio_list_new ();
+    bool skip_following_extents = false;
 
     _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
     if (!_dirbuf)
@@ -1435,9 +1436,19 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
 	if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
   	  continue;
 
-	p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
-						 p_iso9660_stat, dunno,
-						 p_env->u_joliet_level);
+	if (skip_following_extents) {
+	  /* Do not register remaining extents of ill file */
+	  p_iso9660_stat = NULL;
+	} else {
+	  p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
+						   p_iso9660_stat, dunno,
+						   p_env->u_joliet_level);
+	  if (NULL == p_iso9660_stat)
+	    skip_following_extents = true; /* Start ill file mode */
+	}
+	if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
+	  skip_following_extents = false; /* Ill or not: The file ends now */
+
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
@@ -1485,7 +1496,7 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
     uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
     CdioList_t *retval = _cdio_list_new ();
     const size_t dirbuf_len = blocks * ISO_BLOCKSIZE;
-
+    bool skip_following_extents = false;
 
     if (!dirbuf_len)
       {
@@ -1519,10 +1530,19 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
 	if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
 	  continue;
 
-	p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
-						 p_iso9660_stat,
-						 p_iso->b_xa,
-						 p_iso->u_joliet_level);
+	if (skip_following_extents) {
+	  /* Do not register remaining extents of ill file */
+          p_iso9660_stat = NULL;
+	} else {
+	  p_iso9660_stat = _iso9660_dir_to_statbuf(p_iso9660_dir,
+						   p_iso9660_stat,
+						   p_iso->b_xa,
+						   p_iso->u_joliet_level);
+	  if (NULL == p_iso9660_stat)
+	    skip_following_extents = true; /* Start ill file mode */
+	}
+	if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
+	  skip_following_extents = false; /* Ill or not: The file ends now */
 	if ((p_iso9660_stat) &&
 	    ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0))
 	  {
