@@ -52,7 +52,6 @@
 
 #include <cdio/cdio.h>
 #include <cdio/iso9660.h>
-#include <inttypes.h>
 
 #define print_vd_info(title, fn)	  \
   if (fn(p_iso, &psz_str)) {		  \
@@ -70,7 +69,6 @@ main(int argc, const char *argv[])
   char const *psz_fname;
   iso9660_t *p_iso;
   const char *psz_path = "/";
-  char psz_extents[] = " [# extents]";
 
   if (argc > 1)
     psz_fname = argv[1];
@@ -104,16 +102,15 @@ main(int argc, const char *argv[])
     _CDIO_LIST_FOREACH (p_entnode, p_entlist)
     {
       char filename[4096];
+      double total_size;
       iso9660_stat_t *p_statbuf =
 	(iso9660_stat_t *) _cdio_list_node_data (p_entnode);
       iso9660_name_translate(p_statbuf->filename, filename);
 
-	if (p_statbuf->num_extents > 1)
-	    psz_extents[2] = '0' + p_statbuf->num_extents;
-	printf ("%s [LSN %8d] %12" PRIi64 " %s%s%s\n",
-		_STAT_DIR == p_statbuf->type ? "d" : "-",
-		p_statbuf->extent_lsn[0], p_statbuf->total_size, psz_path, filename,
-		p_statbuf->num_extents < 2 ? "" : psz_extents);
+      total_size = (double) p_statbuf->total_size;
+      printf ("%s [LSN %8d] %12.f %s%s\n",
+	      _STAT_DIR == p_statbuf->type ? "d" : "-",
+	      p_statbuf->lsn, total_size,  psz_path, filename);
     }
 
     iso9660_filelist_free(p_entlist);

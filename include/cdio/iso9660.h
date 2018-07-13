@@ -156,9 +156,6 @@ extern enum iso_vd_enum_s {
 /*! \brief Maximum number of characters in a volume-set id. */
 #define ISO_MAX_VOLUMESET_ID 128
 
-/*! \brief Maximum number of multi file extent licdio supports. */
-#define ISO_MAX_MULTIEXTENT 8
-
 /*! String inside frame which identifies an ISO 9660 filesystem. This
     string is the "id" field of an iso9660_pvd_t or an iso9660_svd_t.
 */
@@ -538,23 +535,32 @@ struct iso9660_stat_s { /* big endian!! */
 
   struct tm          tm;              /**< time on entry - FIXME merge with
                                          one of entries above, like ctime? */
-#ifndef DO_NOT_WANT_COMPATIBILITY
-  /* Legacy API (Deprecated) */
   lsn_t              lsn;             /**< start logical sector number */
-  uint32_t           size;            /**< size of the first extent, in bytes */
-  uint32_t           secsize;         /**< size of the first extent, in sectors */
+
+#ifndef DO_NOT_WANT_COMPATIBILITY
+
+  /* *** Deprecated Legacy API ***
+     Use .total_size and CDIO_EXTENT_BLOCKS.
+   */
+  uint32_t           size;         /**< size of the first extent, in bytes */
+  uint32_t           secsize;      /**< size of the first extent, in sectors */
+
 #endif /* DO_NOT_WANT_COMPATIBILITY */
 
-  /* Multi-Extent API */
-  uint32_t           num_extents;     /**< number of extents */
-                     /**v combined size of all extents, in bytes */
+  /* Multi-extent aware size, in bytes.
+
+     It is guaranteed that the bytes are stored as gapless string in a
+     continguous sequence of blocks. I.e. they can be read sequentially
+     starting at iso9660_stat_s.lsn.
+     Data files which do not fulfil this promise cause a warning message
+     and are not represented by this type of struct.
+     (Directories are not allowed to have more than one extent and thus cannot
+      legally break the promise.)
+   */
   uint64_t           total_size;
-                     /**v start logical sector number for each extent */
-  lsn_t              extent_lsn[ISO_MAX_MULTIEXTENT];
-                     /**v size of each extent */
-  uint32_t           extent_size[ISO_MAX_MULTIEXTENT];
+
   /* NB: If you need to access the 'secsize' equivalent for an extent,
-   * you should use CDIO_EXTENT_BLOCKS(extent_size[extent_nr]) */
+   * you should use CDIO_EXTENT_BLOCKS(iso9660_stat_s.total_size) */
 
   iso9660_xa_t       xa;              /**< XA attributes */
   enum { _STAT_FILE = 1, _STAT_DIR = 2 } type;

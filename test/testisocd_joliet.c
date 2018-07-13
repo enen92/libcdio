@@ -106,24 +106,27 @@ main(int argc, const char *argv[])
       /* Now try getting the statbuf another way */
       char buf[ISO_BLOCKSIZE];
       char *psz_path = NULL;
-      const lsn_t i_lsn = p_statbuf->extent_lsn[0];
+      const lsn_t i_lsn = p_statbuf->lsn;
       iso9660_stat_t *p_statbuf2 = iso9660_ifs_find_lsn (p_iso, i_lsn);
       iso9660_stat_t *p_statbuf3 =
 	iso9660_ifs_find_lsn_with_path (p_iso, i_lsn, &psz_path);
       int rc=0;
       const unsigned int statbuf_test_size = 100;
+      double total_size;
 
       /* Compare the two statbufs. */
-      if (p_statbuf->extent_lsn[0] != p_statbuf2->extent_lsn[0] ||
-	  p_statbuf->size != p_statbuf2->size ||
+      if (p_statbuf->lsn != p_statbuf2->lsn ||
+	  p_statbuf->total_size != p_statbuf2->total_size ||
 	  p_statbuf->type != p_statbuf2->type) {
 
 	  fprintf(stderr, "File stat information between fs_stat and "
 		  "iso9660_ifs_find_lsn isn't the same\n");
-	  printf("statbuf  lsn: %d, size: %d, type: %d\n",
-		 p_statbuf->extent_lsn[0], p_statbuf->extent_size[0], p_statbuf->type);
-	  printf("statbuf2 lsn: %d, size: %d, type: %d\n",
-		 p_statbuf2->extent_lsn[0], p_statbuf2->extent_size[0], p_statbuf2->type);
+	  total_size = p_statbuf->total_size;
+	  printf("statbuf  lsn: %d, size: %4.f, type: %d\n",
+		 p_statbuf->lsn, total_size, p_statbuf->type);
+	  total_size = p_statbuf2->total_size;
+	  printf("statbuf2 lsn: %d, size: %4.f, type: %d\n",
+		 p_statbuf2->lsn, total_size, p_statbuf2->type);
 	  rc=3;
 	  goto exit;
       }
@@ -157,7 +160,7 @@ main(int argc, const char *argv[])
       if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, i_lsn, 1) )
 	{
 	  fprintf(stderr, "Error reading ISO 9660 file at lsn %lu\n",
-		  (long unsigned int) p_statbuf->extent_lsn[0]);
+		  (long unsigned int) p_statbuf->lsn);
 	  rc=7;
 	}
     exit:

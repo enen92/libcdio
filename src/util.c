@@ -480,26 +480,20 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
 	       const char *psz_name_translated)
 {
   char date_str[30];
+  double total_size, m2f2_size;
 
 #ifdef HAVE_ROCK
   if (yep == p_statbuf->rr.b3_rock && b_rock) {
-    report ( stdout, "  %s %3d %d %d [LSN %6lu] %9u",
+    total_size = (double) (S_ISLNK(p_statbuf->rr.st_mode)
+				? strlen(p_statbuf->rr.psz_symlink)
+				: (unsigned int) p_statbuf->total_size );
+    report ( stdout, "  %s %3d %d %d [LSN %6lu] %9.f",
 	     iso9660_get_rock_attr_str (p_statbuf->rr.st_mode),
 	     p_statbuf->rr.st_nlinks,
 	     p_statbuf->rr.st_uid,
 	     p_statbuf->rr.st_gid,
-#ifndef DO_NOT_WANT_COMPATIBILITY
 	     (long unsigned int) p_statbuf->lsn,
-#else
-	     (long unsigned int) p_statbuf->extent_lsn[0],
-#endif
-	     S_ISLNK(p_statbuf->rr.st_mode)
-	     ? strlen(p_statbuf->rr.psz_symlink)
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	     : (unsigned int) p_statbuf->size );
-#else
-	     : (unsigned int) p_statbuf->total_size );
-#endif
+	     total_size );
 
   } else
 #endif
@@ -509,37 +503,20 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
 	     uint16_from_be (p_statbuf->xa.user_id),
 	     uint16_from_be (p_statbuf->xa.group_id),
 	     p_statbuf->xa.filenum,
-#ifndef DO_NOT_WANT_COMPATIBILITY
 	     (long unsigned int) p_statbuf->lsn );
-#else
-	     (long unsigned int) p_statbuf->extent_lsn[0] );
-#endif
 
+    total_size = (double) p_statbuf->total_size;
     if (uint16_from_be(p_statbuf->xa.attributes) & XA_ATTR_MODE2FORM2) {
-      report ( stdout, "%9u (%9u)",
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	       (unsigned int) p_statbuf->secsize * M2F2_SECTOR_SIZE,
-	       (unsigned int) p_statbuf->size );
-#else
-	       (unsigned int) CDIO_EXTENT_BLOCKS(p_statbuf->extent_size[0])* M2F2_SECTOR_SIZE,
-	       (unsigned int) p_statbuf->total_size );
-#endif
+      m2f2_size = (double) CDIO_EXTENT_BLOCKS(p_statbuf->total_size)
+			   * M2F2_SECTOR_SIZE;
+      report ( stdout, "%9.f (%9.f)", m2f2_size, total_size );
     } else
-#ifndef DO_NOT_WANT_COMPATIBILITY
-      report (stdout, "%9u", (unsigned int) p_statbuf->size);
-#else
-      report (stdout, "%9u", (unsigned int) p_statbuf->total_size);
-#endif
+      report (stdout, "%9.f", total_size);
   } else {
-    report ( stdout,"  %c [LSN %6lu] %9u",
+    total_size = (double) p_statbuf->total_size;
+    report ( stdout,"  %c [LSN %6lu] %9.f",
 	     (p_statbuf->type == _STAT_DIR) ? 'd' : '-',
-#ifndef DO_NOT_WANT_COMPATIBILITY
-	     (long unsigned int) p_statbuf->lsn,
-	     (unsigned int) p_statbuf->size );
-#else
-	     (long unsigned int) p_statbuf->extent_lsn[0],
-	     (unsigned int) p_statbuf->total_size );
-#endif
+	     (long unsigned int) p_statbuf->lsn, total_size );
   }
 
   if (yep == p_statbuf->rr.b3_rock && b_rock) {

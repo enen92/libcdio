@@ -99,7 +99,7 @@ main(int argc, const char *argv[])
 
       char buf[ISO_BLOCKSIZE];
       char *psz_path = NULL;
-      const lsn_t i_lsn = p_statbuf->extent_lsn[0];
+      const lsn_t i_lsn = p_statbuf->lsn;
       iso9660_stat_t *p_statbuf2 = iso9660_fs_find_lsn (p_cdio, i_lsn);
       iso9660_stat_t *p_statbuf3 =
 	iso9660_fs_find_lsn_with_path (p_cdio, i_lsn, &psz_path);
@@ -107,8 +107,8 @@ main(int argc, const char *argv[])
       const unsigned int statbuf_test_size = 100;
 
       /* Compare the two statbufs. */
-      if (p_statbuf->extent_lsn[0] != p_statbuf2->extent_lsn[0] ||
-	  p_statbuf->size != p_statbuf2->size ||
+      if (p_statbuf->lsn != p_statbuf2->lsn ||
+	  p_statbuf->total_size != p_statbuf2->total_size ||
 	  p_statbuf->type != p_statbuf2->type) {
 	  fprintf(stderr, "File stat information between fs_stat and "
 		  "fs_find_lsn isn't the same\n");
@@ -143,7 +143,7 @@ main(int argc, const char *argv[])
       if ( 0 != cdio_read_data_sectors (p_cdio, buf, i_lsn, ISO_BLOCKSIZE, 1) )
 	{
 	  fprintf(stderr, "Error reading ISO 9660 file at lsn %lu\n",
-		  (long unsigned int) p_statbuf->extent_lsn[0]);
+		  (long unsigned int) p_statbuf->lsn);
 	  rc=7;
 	}
     exit:
@@ -151,6 +151,8 @@ main(int argc, const char *argv[])
       iso9660_stat_free(p_statbuf2);
       iso9660_stat_free(p_statbuf3);
       cdio_destroy(p_cdio);
+      if (NULL != psz_path)
+	free(psz_path);
       exit(rc);
     }
   }

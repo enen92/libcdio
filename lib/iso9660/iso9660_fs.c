@@ -788,6 +788,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   char rr_fname[256] = "";
   int  i_rr_fname;
   lsn_t extent_lsn;
+  bool first_extent;
 
   if (!dir_len) return NULL;
 
@@ -797,8 +798,12 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   stat_len = sizeof(iso9660_stat_t) + i_fname + 2;
 
   /* Reuse multiextent p_stat if not NULL */
-  if (!p_stat)
+  if (!p_stat) {
     p_stat = calloc(1, stat_len);
+    first_extent = true;
+  } else {
+    first_extent = false;
+  }
   if (!p_stat) {
     cdio_warn("Couldn't calloc(1, %d)", stat_len);
     return NULL;
@@ -808,7 +813,7 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
 
   /* Test for gaps between extents. Important: Use previous .total_size */
   extent_lsn = from_733 (p_iso9660_dir->extent);
-  if (p_stat->num_extents > 0) {
+  if (p_stat->total_size > 0) {
     /* This is a follow-up extent. Check for a gap. */
     if (p_stat->lsn + p_stat->total_size / ISO_BLOCKSIZE != extent_lsn
 	|| p_stat->total_size % ISO_BLOCKSIZE) {
@@ -816,19 +821,19 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
       cdio_warn("Non-contiguous data extents with '%s'", p_stat->filename);
       goto fail;
     }
+  } else if (first_extent) {
+    p_stat->lsn = extent_lsn;
   }
+  /* Only now update .total_size */
+  p_stat->total_size += from_733 (p_iso9660_dir->size);
 
-  p_stat->extent_lsn[p_stat->num_extents] = from_733 (p_iso9660_dir->extent);
-  p_stat->extent_size[p_stat->num_extents] = from_733 (p_iso9660_dir->size);
-  p_stat->total_size += p_stat->extent_size[p_stat->num_extents];
   p_stat->rr.b3_rock = dunno; /*FIXME should do based on mask */
   p_stat->b_xa    = false;
 
 #ifndef DO_NOT_WANT_COMPATIBILITY
-  if (p_stat->num_extents == 0) {
-    p_stat->lsn = p_stat->extent_lsn[0];
-    p_stat->size = p_stat->extent_size[0];
-    p_stat->secsize = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
+  if (first_extent) {
+    p_stat->size = from_733 (p_iso9660_dir->size);
+    p_stat->secsize = CDIO_EXTENT_BLOCKS(p_stat->size);
   }
 #endif /* DO_NOT_WANT_COMPATIBILITY */
 
@@ -836,9 +841,10 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
   {
     /* Check if this is the last part of a multiextent file */
-    if (p_stat->num_extents != 0) {
+    if (!first_extent) {
       if (strcmp(p_stat->filename, &p_iso9660_dir->filename.str[1]) != 0) {
-	cdio_warn("Non consecutive multiextent file parts for '%s'", p_stat->filename);
+	cdio_warn("Non consecutive multiextent file parts for '%s'",
+		  p_stat->filename);
 	goto fail;
       }
     }
@@ -891,11 +897,6 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
       /* Use the plain ISO-9660 name when dealing with a multiextent file part */
       strncpy(p_stat->filename, &p_iso9660_dir->filename.str[1], i_fname);
   }
-  if (p_stat->num_extents >= ISO_MAX_MULTIEXTENT) {
-      cdio_warn("Warning: Too many multiextent file parts for '%s'", p_stat->filename);
-      goto fail;
-  }
-  p_stat->num_extents++;
 
   iso9660_get_dtime(&(p_iso9660_dir->recording_time), true, &(p_stat->tm));
 
@@ -1076,7 +1077,7 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
     return NULL;
 
   cdio_assert (_root->type == _STAT_DIR);
-  blocks = CDIO_EXTENT_BLOCKS(_root->extent_size[0]);
+  blocks = CDIO_EXTENT_BLOCKS(_root->total_size);
 
   _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
   if (!_dirbuf)
@@ -1085,7 +1086,7 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_stat_t *_root,
     return NULL;
     }
 
-  if (cdio_read_data_sectors (p_cdio, _dirbuf, _root->extent_lsn[0], ISO_BLOCKSIZE,
+  if (cdio_read_data_sectors (p_cdio, _dirbuf, _root->lsn, ISO_BLOCKSIZE,
 			      blocks))
       return NULL;
 
@@ -1187,7 +1188,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 
   cdio_assert (_root->type == _STAT_DIR);
 
-  blocks = CDIO_EXTENT_BLOCKS(_root->extent_size[0]);
+  blocks = CDIO_EXTENT_BLOCKS(_root->total_size);
   _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
   if (!_dirbuf)
     {
@@ -1195,7 +1196,7 @@ _fs_iso_stat_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
     return NULL;
     }
 
-  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->extent_lsn[0], blocks);
+  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->lsn, blocks);
   if (ret != blocks * ISO_BLOCKSIZE) {
     free(_dirbuf);
     return NULL;
@@ -1440,7 +1441,7 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
   {
     unsigned offset = 0;
     uint8_t *_dirbuf = NULL;
-    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
+    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->total_size);
     CdioISO9660DirList_t *retval = _cdio_list_new ();
     bool skip_following_extents = false;
 
@@ -1453,7 +1454,7 @@ iso9660_fs_readdir (CdIo_t *p_cdio, const char psz_path[])
       return NULL;
       }
 
-    if (cdio_read_data_sectors (p_cdio, _dirbuf, p_stat->extent_lsn[0],
+    if (cdio_read_data_sectors (p_cdio, _dirbuf, p_stat->lsn,
 				ISO_BLOCKSIZE, blocks)) {
       iso9660_stat_free(p_stat);
       iso9660_dirlist_free(retval);
@@ -1524,7 +1525,7 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
     long int ret;
     unsigned offset = 0;
     uint8_t *_dirbuf = NULL;
-    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->extent_size[0]);
+    uint32_t blocks = CDIO_EXTENT_BLOCKS(p_stat->total_size);
     CdioList_t *retval = _cdio_list_new ();
     const size_t dirbuf_len = blocks * ISO_BLOCKSIZE;
     bool skip_following_extents = false;
@@ -1546,7 +1547,7 @@ iso9660_ifs_readdir (iso9660_t *p_iso, const char psz_path[])
         return NULL;
       }
 
-    ret = iso9660_iso_seek_read (p_iso, _dirbuf, p_stat->extent_lsn[0], blocks);
+    ret = iso9660_iso_seek_read (p_iso, _dirbuf, p_stat->lsn, blocks);
     if (ret != dirbuf_len) 	  {
       _cdio_list_free (retval, true, NULL);
       iso9660_stat_free(p_stat);
@@ -1627,7 +1628,6 @@ find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
       iso9660_stat_t *statbuf = _cdio_list_node_data (entnode);
       const char *psz_filename  = (char *) statbuf->filename;
       unsigned int len = strlen(psz_path) + strlen(psz_filename)+2;
-      size_t extent;
 
       if (*ppsz_full_filename != NULL) free(*ppsz_full_filename);
       *ppsz_full_filename = calloc(1, len);
@@ -1636,26 +1636,26 @@ find_lsn_recurse (void *p_image, iso9660_readdir_t iso9660_readdir,
       if (statbuf->type == _STAT_DIR
           && strcmp ((char *) statbuf->filename, ".")
           && strcmp ((char *) statbuf->filename, "..")) {
-        snprintf (*ppsz_full_filename, len, "%s%s/", psz_path, psz_filename);
+	snprintf (*ppsz_full_filename, len, "%s%s/", psz_path, psz_filename);
         _cdio_list_append (dirlist, strdup(*ppsz_full_filename));
       }
 
-      for (extent = 0; extent < statbuf->num_extents; extent++) {
-        if (statbuf->extent_lsn[extent] == lsn) {
-          const unsigned int len2 = sizeof(iso9660_stat_t) + strlen(statbuf->filename) + 1;
-          iso9660_stat_t *ret_stat = calloc(1, len2);
-          if (!ret_stat) {
-            iso9660_dirlist_free(dirlist);
-            cdio_warn("Couldn't calloc(1, %d)", len2);
-            free(*ppsz_full_filename);
-            *ppsz_full_filename = NULL;
-            return NULL;
-          }
-          memcpy(ret_stat, statbuf, len2);
-          iso9660_filelist_free (entlist);
-          iso9660_dirlist_free(dirlist);
-          return ret_stat;
-        }
+      if (statbuf->lsn == lsn) {
+	const unsigned int len2 = sizeof(iso9660_stat_t) +
+				  strlen(statbuf->filename) + 1;
+	iso9660_stat_t *ret_stat = calloc(1, len2);
+	if (!ret_stat)
+	  {
+	    iso9660_dirlist_free(dirlist);
+	    cdio_warn("Couldn't calloc(1, %d)", len2);
+	    free(*ppsz_full_filename);
+	    *ppsz_full_filename = NULL;
+	    return NULL;
+	  }
+	memcpy(ret_stat, statbuf, len2);
+	iso9660_filelist_free (entlist);
+	iso9660_dirlist_free(dirlist);
+	return ret_stat;
       }
 
     }
@@ -1836,7 +1836,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
 
   cdio_assert (_root->type == _STAT_DIR);
 
-   blocks = CDIO_EXTENT_BLOCKS(_root->extent_size[0]);
+   blocks = CDIO_EXTENT_BLOCKS(_root->total_size);
   _dirbuf = calloc(1, blocks * ISO_BLOCKSIZE);
   if (!_dirbuf)
     {
@@ -1844,7 +1844,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
     return dunno;
     }
 
-  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->extent_lsn[0], blocks);
+  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->total_size, blocks);
   if (ret != blocks * ISO_BLOCKSIZE) {
     free(_dirbuf);
     return false;

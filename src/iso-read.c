@@ -211,7 +211,7 @@ static int read_iso_file(const char *iso_name, const char *src,
                          FILE *outfd, size_t *bytes_written)
 {
   iso9660_stat_t *statbuf;
-  int i, j;
+  uint64_t i;
   iso9660_t *iso;
 
   iso = iso9660_open (iso_name);
@@ -234,35 +234,39 @@ static int read_iso_file(const char *iso_name, const char *src,
       report(stderr,
              "%s: iso-info may be able to show the contents of %s.\n",
              program_name, iso_name);
+      iso9660_close(iso);
       return 2;
     }
 
 
   /* Copy the blocks from the ISO-9660 filesystem to the local filesystem. */
-  for (j = 0; j < statbuf->num_extents; j++) {
-    for (i = 0; i < statbuf->extent_size[j]; i += ISO_BLOCKSIZE) {
+  for (i = 0; i < statbuf->total_size; i += ISO_BLOCKSIZE)
+    {
       char buf[ISO_BLOCKSIZE];
 
       memset (buf, 0, ISO_BLOCKSIZE);
 
-      if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (iso, buf, statbuf->extent_lsn[j]
+      if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (iso, buf, statbuf->lsn
                                                    + (i / ISO_BLOCKSIZE),
                                                    1) )
       {
         report(stderr, "Error reading ISO 9660 file at lsn %lu\n",
-               (long unsigned int) statbuf->extent_lsn[j] + (i / ISO_BLOCKSIZE));
+               (long unsigned int) statbuf->lsn + (i / ISO_BLOCKSIZE));
         if (!opts.ignore) return 4;
       }
+
 
       fwrite (buf, ISO_BLOCKSIZE, 1, outfd);
 
       if (ferror (outfd))
         {
           perror ("fwrite()");
+          iso9660_stat_free(statbuf);
+          iso9660_close(iso);
           return 5;
         }
     }
-  }
+
   iso9660_close(iso);
 
   *bytes_written = statbuf->total_size;
