@@ -164,7 +164,7 @@ main(int argc, const char *argv[])
   /* Make sure the file size has the exact same byte size. Without the
      truncate below, the file will a multiple of ISO_BLOCKSIZE.
    */
-  if (ftruncate (fileno (p_outfd), p_statbuf->size))
+  if (ftruncate (fileno (p_outfd), p_statbuf->total_size))
     perror ("ftruncate()");
 
   printf("-- Extraction of file '%s' from '%s' successful.\n",

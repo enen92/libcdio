@@ -265,7 +265,7 @@ static int read_iso_file(const char *iso_name, const char *src,
   }
   iso9660_close(iso);
 
-  *bytes_written = statbuf->size;
+  *bytes_written = statbuf->total_size;
   return 0;
 }
 
