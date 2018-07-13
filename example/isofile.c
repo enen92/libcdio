@@ -126,34 +126,93 @@ main(int argc, const char *argv[])
 
   num_extents = iso9660_statv2_get_extents(p_statbuf, &extents);
 
-  for (j = 0; j < num_extents; j++) {
-    uint32_t to_write;
-    size_t write_now;
-    lsn_t lsn = extents[j].lsn;
+  /* The following alternatives demonstrate the normal case that multi-extent
+     files are stored as a contiguous string of bytes, and the rather exotic
+     case that the extents are not stored seamlessly in sequence.
+     The call iso9660_statv2_has_extent_gaps() tells which situation is found.
+   */
 
-    to_write = extents[j].size;
+  if (!iso9660_statv2_has_extent_gaps(p_statbuf)) {
+
+    /* If the program gets here, then the normal and simple situation is given.
+
+       The following read procedure is very similar to the read procedure with
+       legacy iso9660_stat_t. The only differences are the use of
+         extents[0].lsn                   instead of  p_statv1->lsn
+         iso9660_statv2_get_total_size()  instead of  p_statv1->size
+
+       So if it is cumbersome to adapt the read procedures of an application
+       to the new multi-extent capabilities of iso9660_statv2_t, then
+       consider to make only this small change and to bail out with error if
+       iso9660_statv2_has_extent_gaps() returns "true".
+     */
+
+    uint64_t to_write;
+    size_t write_now;
+    lsn_t lsn = extents[0].lsn;
+    char buf[ISO_BLOCKSIZE];
+
+    to_write = iso9660_statv2_get_total_size(p_statbuf);
     while (to_write > 0) {
-      char buf[ISO_BLOCKSIZE];
 
       memset (buf, 0, ISO_BLOCKSIZE);
 
       if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, lsn, 1) ) {
-	fprintf(stderr, "Error reading ISO 9660 file %s at LSN %lu\n",
-		psz_fname, (long unsigned int) lsn);
-	my_exit(4);
+        fprintf(stderr, "Error reading ISO 9660 file %s at LSN %lu\n",
+                psz_fname, (long unsigned int) lsn);
+        my_exit(4);
       }
 
       write_now = to_write > ISO_BLOCKSIZE ? ISO_BLOCKSIZE : to_write;
       fwrite (buf, write_now, 1, p_outfd);
-
       if (ferror (p_outfd)) {
-	perror ("fwrite()");
-	my_exit(5);
+        perror ("fwrite()");
+        my_exit(5);
       }
 
       to_write -= write_now;
       lsn++;
     }
+
+  } else {
+
+    /* If program execution gets here, then the file cannot be read in one
+       sequential sweep.
+       Of course the following read procedure is suitable for the normal case
+       too.
+     */
+    fprintf(stderr, "Note: Found multi-extent file with gaps. Will apply suitable read procedure.\n");
+
+    for (j = 0; j < num_extents; j++) {
+      uint32_t to_write;
+      size_t write_now;
+      lsn_t lsn = extents[j].lsn;
+
+      to_write = extents[j].size;
+      while (to_write > 0) {
+        char buf[ISO_BLOCKSIZE];
+
+        memset (buf, 0, ISO_BLOCKSIZE);
+
+        if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, lsn, 1) ) {
+          fprintf(stderr, "Error reading ISO 9660 file %s at LSN %lu\n",
+          psz_fname, (long unsigned int) lsn);
+          my_exit(4);
+        }
+
+        write_now = to_write > ISO_BLOCKSIZE ? ISO_BLOCKSIZE : to_write;
+        fwrite (buf, write_now, 1, p_outfd);
+
+	if (ferror (p_outfd)) {
+          perror ("fwrite()");
+          my_exit(5);
+        }
+
+        to_write -= write_now;
+        lsn++;
+      }
+    }
+
   }
 
   fflush (p_outfd);
