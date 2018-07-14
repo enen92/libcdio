@@ -122,6 +122,8 @@ main(int argc, const char *argv[])
       char buf[ISO_BLOCKSIZE];
       const lsn_t lsn = p_statbuf->lsn + i;
 
+      memset (buf, 0, ISO_BLOCKSIZE);
+
       if ( ISO_BLOCKSIZE != iso9660_iso_seek_read (p_iso, buf, lsn, 1) )
       {
 	fprintf(stderr, "Error reading ISO 9660 file %s at LSN %lu\n",

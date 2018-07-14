@@ -486,7 +486,7 @@ print_fs_attrs(iso9660_stat_t *p_statbuf, bool b_rock, bool b_xa,
   if (yep == p_statbuf->rr.b3_rock && b_rock) {
     total_size = (double) (S_ISLNK(p_statbuf->rr.st_mode)
 				? strlen(p_statbuf->rr.psz_symlink)
-				: (unsigned int) p_statbuf->total_size );
+				: p_statbuf->total_size );
     report ( stdout, "  %s %3d %d %d [LSN %6lu] %9.f",
 	     iso9660_get_rock_attr_str (p_statbuf->rr.st_mode),
 	     p_statbuf->rr.st_nlinks,
