@@ -1299,6 +1299,8 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_statv2_t *_root,
   uint32_t blocks;
   iso9660_statv2_t *p_stat;
   generic_img_private_t *p_env = (generic_img_private_t *) p_cdio->env;
+  iso9660_statv2_t *p_iso9660_stat = NULL;
+  bool skip_following_extents = false;
 
   if (!splitpath[0])
     {
@@ -1326,14 +1328,26 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_statv2_t *_root,
   while (offset < (blocks * ISO_BLOCKSIZE))
     {
       iso9660_dir_t *p_iso9660_dir = (void *) &_dirbuf[offset];
-      iso9660_statv2_t *p_iso9660_stat;
       int cmp;
 
       if (iso9660_check_dir_block_end(p_iso9660_dir, &offset))
 	continue;
 
-      p_iso9660_stat = _iso9660_dir_to_statbuf (p_iso9660_dir, NULL,
-					dunno, p_env->u_joliet_level, true);
+      if (skip_following_extents) {
+	/* Do not register remaining extents of ill file */
+	p_iso9660_stat = NULL;
+      } else {
+	p_iso9660_stat = _iso9660_dir_to_statbuf (p_iso9660_dir,
+			  p_iso9660_stat, dunno, p_env->u_joliet_level, false);
+	if (NULL == p_iso9660_stat)
+	  skip_following_extents = true; /* Start ill file mode */
+      }
+      if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
+	skip_following_extents = false; /* Ill or not: The file ends now */
+
+      if (NULL == p_iso9660_stat ||
+	  (p_iso9660_dir->file_flags & ISO_MULTIEXTENT))
+	goto skip_to_next_record;
 
       cmp = strcmp(splitpath[0], p_iso9660_stat->filename);
 
@@ -1366,6 +1380,9 @@ _fs_stat_traverse (const CdIo_t *p_cdio, const iso9660_statv2_t *_root,
       }
 
       iso9660_statv2_free(p_iso9660_stat);
+      p_iso9660_stat = NULL;
+
+skip_to_next_record:;
 
       offset += iso9660_get_dir_len(p_iso9660_dir);
     }
