@@ -1844,7 +1844,7 @@ iso_have_rr_traverse (iso9660_t *p_iso, const iso9660_stat_t *_root,
     return dunno;
     }
 
-  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->total_size, blocks);
+  ret = iso9660_iso_seek_read (p_iso, _dirbuf, _root->lsn, blocks);
   if (ret != blocks * ISO_BLOCKSIZE) {
     free(_dirbuf);
     return false;
