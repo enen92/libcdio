@@ -537,7 +537,7 @@ struct iso9660_stat_s { /* big endian!! */
                                          one of entries above, like ctime? */
   lsn_t              lsn;             /**< start logical sector number */
 
-#ifndef LIBCDIO_API_2020
+#ifndef DO_NOT_WANT_COMPATIBILITY
 
   /* *** Deprecated Legacy API ***
      Use .total_size and CDIO_EXTENT_BLOCKS.
@@ -545,7 +545,7 @@ struct iso9660_stat_s { /* big endian!! */
   uint32_t           size;         /**< size of the first extent, in bytes */
   uint32_t           secsize;      /**< size of the first extent, in sectors */
 
-#endif /* LIBCDIO_API_2020 */
+#endif /* DO_NOT_WANT_COMPATIBILITY */
 
   /* Multi-extent aware size, in bytes.
 
