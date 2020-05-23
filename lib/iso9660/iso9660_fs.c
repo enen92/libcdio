@@ -832,19 +832,20 @@ _iso9660_dir_to_statbuf (iso9660_dir_t *p_iso9660_dir,
   p_stat->rr.b3_rock = dunno; /*FIXME should do based on mask */
   p_stat->b_xa    = false;
 
-#ifndef LIBCDIO_API_2020
+#ifndef DO_NOT_WANT_COMPATIBILITY
   if (first_extent) {
     p_stat->size = from_733(p_iso9660_dir->size);
     p_stat->secsize = CDIO_EXTENT_BLOCKS(p_stat->size);
   }
-#endif /* LIBCDIO_API_2020 */
+#endif /* DO_NOT_WANT_COMPATIBILITY */
 
   /* Only resolve the full filename when we're not dealing with extent */
   if ((p_iso9660_dir->file_flags & ISO_MULTIEXTENT) == 0)
   {
     /* Check if this is the last part of a multiextent file */
     if (!first_extent) {
-      if (strcmp(p_stat->filename, &p_iso9660_dir->filename.str[1]) != 0) {
+      if (strlen(p_stat->filename) != i_fname ||
+          strncmp(p_stat->filename, &p_iso9660_dir->filename.str[1], i_fname) != 0) {
 	cdio_warn("Non consecutive multiextent file parts for '%s'",
 		  p_stat->filename);
 	goto fail;
