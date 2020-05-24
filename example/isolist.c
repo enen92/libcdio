@@ -25,9 +25,9 @@
    name (that comes with the libcdio distribution) will be used.
  */
 
-/* Set up a CD-DA image to test on which is in the libcdio distribution. */
-#define ISO9660_IMAGE_PATH "../test/"
-#define ISO9660_IMAGE ISO9660_IMAGE_PATH "copying.iso"
+/* Set up a ISO 9660 image to test on which is in the libcdio distribution. */
+#define ISO9660_IMAGE_PATH "../"
+#define ISO9660_IMAGE ISO9660_IMAGE_PATH "test/data/multi_extent_8k.iso"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"

@@ -1,5 +1,5 @@
 /*
-  Copyright (C) 2004, 2006, 2008, 2009 2017 Rocky Bernstein <rocky@gnu.org>
+  Copyright (C) 2004, 2006, 2008-2009 2017, 2020 Rocky Bernstein <rocky@gnu.org>
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -28,9 +28,9 @@
    things on the C++ side.
  */
 
-/* Set up a CD-DA image to test on which is in the libcdio distribution. */
+/* Set up an ISO 9660 image to test on which is in the libcdio distribution. */
 #define ISO9660_IMAGE_PATH "../../"
-#define ISO9660_IMAGE ISO9660_IMAGE_PATH "test/copying.iso"
+#define ISO9660_IMAGE ISO9660_IMAGE_PATH "test/data/multi_extent_8k.iso"
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -107,9 +107,9 @@ main(int argc, const char *argv[])
       iso9660_stat_t *p_statbuf =
 	(iso9660_stat_t *) _cdio_list_node_data (p_entnode);
       iso9660_name_translate(p_statbuf->filename, filename);
-      printf ("%s [LSN %6d] %8u %s%s\n",
+      printf ("%s [LSN %6d] %8lu %s%s\n",
 	      2 == p_statbuf->type ? "d" : "-",
-	      p_statbuf->lsn, p_statbuf->size, psz_path, filename);
+	      p_statbuf->lsn, p_statbuf->total_size, psz_path, filename);
     }
 
    iso9660_filelist_free(p_entlist);
