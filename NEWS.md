@@ -1,3 +1,20 @@
+version 3.0.0
+=============
+
+This version adds multi-extent support for ISO-9660. Previously the blocks making up an ISO-9660 file had to come strictly sequentially.
+
+In this version, when libiso9600 detects that this is not the case, a warning message is generated and a `iso9660_stat_t` object is not created.
+
+the file will not appear in `readdir()`-ish results and individual inquiries will yield `NULL` rather than an `iso9660_stat_t` object.
+
+Programs written for previous versions of _libcdio_ will still work for single-extent files. However in order to handle large multi-extent files, applications
+need to be adapted:
+
+* switch from using `iso9660_stat_t.size` to the new attrtibute `iso9660_stat_t.total_size`
+* make sure that loop controlling variables can cope with integer numbers up to 43 bit numbers. In C-like lanaguage this may mean switching from `int` to `long int`
+
+Notes: 43 bits is the sum of a 32-bit block address plus an 11-bit byte address in a block); `mkisofs` and `libisofs` currently only produce the files with sequential blocks.
+
 version 2.1.0
 =============
 2019-04-17 Holy Wednesday
