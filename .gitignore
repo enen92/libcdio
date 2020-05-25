@@ -1,7 +1,7 @@
 *.exe
+*.lo
 *.log
 *.o
-*.lo
 *.stackdump
 *.trs
 *~
@@ -23,6 +23,7 @@
 /configure
 /cov-int
 /depcomp
+/dist
 /install-sh
 /libcdio++.pc
 /libcdio-*.sig

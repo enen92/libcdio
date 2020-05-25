@@ -44,15 +44,15 @@ isofile_LDADD       = $(LIBISO9660PP_LIBS) $(LIBISO9660_LIBS) \
 
 isofile2_SOURCES    = isofile2.cpp
 isofile2_LDADD      = $(LIBISO9660PP_LIBS) $(LIBISO9660_LIBS) \
-	              $(LIBCDIOPP_LIBS) $(LTLIBICONV)
+	              $(LIBCDIOPP_LIBS) $(LTLIBICONV) $(LIBCDIO_LIBS)
 
 isolist_SOURCES     = isolist.cpp
 isolist_LDADD       = $(LIBISO9660PP_LIBS) $(LIBISO9660_LIBS) \
-	              $(LIBCDIOPP_LIBS) $(LTLIBICONV)
+	              $(LIBCDIOPP_LIBS) $(LTLIBICONV) $(LIBCDIO_LIBS)
 
 iso4_SOURCES        = iso4.cpp
 iso4_LDADD          = $(LIBISO9660PP_LIBS) $(LIBISO9660_LIBS) \
-	              $(LIBCDIOPP_LIBS) $(LTLIBICONV)
+	              $(LIBCDIOPP_LIBS) $(LTLIBICONV) $(LIBCDIO_LIBS)
 
 mmc1_SOURCES        = mmc1.cpp
 mmc1_DEPENDENCIES   = $(LIBCDIO_DEPS)
